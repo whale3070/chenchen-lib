@@ -20,6 +20,9 @@
 # production
 /build
 
+# local draft storage (save-draft API)
+.data/
+
 # misc
 .DS_Store
 *.pem

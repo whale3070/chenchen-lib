@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>郴郴文库 · 全球创作者主权平台 | Pitch Deck</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;font-family:"Microsoft Yahei",sans-serif;}
+        body{background:#0a0e17;color:#f0f4f8;overflow:hidden;}
+        .deck{width:100vw;height:100vh;position:relative;}
+        .slide{width:100vw;height:100vh;padding:60px;position:absolute;top:0;left:0;opacity:0;transition:all 0.6s ease;display:flex;flex-direction:column;justify-content:center;}
+        .slide.active{opacity:1;z-index:2;}
+        h1{font-size:48px;margin-bottom:24px;color:#4fc3f7;line-height:1.2;}
+        h2{font-size:32px;margin-bottom:16px;color:#81d4fa;}
+        p{font-size:18px;line-height:1.8;margin-bottom:16px;max-width:900px;color:#cbd5e1;}
+        ul{margin:20px 0 20px 30px;}
+        li{font-size:17px;line-height:1.9;color:#e2e8f0;margin:8px 0;}
+        .tag{display:inline-block;background:#192a40;padding:6px 14px;border-radius:20px;margin:6px;color:#4fc3f7;font-size:14px;}
+        .highlight{color:#4fc3f7;font-weight:bold;}
+        .slogan{
+            font-size:26px;line-height:1.5;color:#e2e8f0;margin:8px 0 24px;max-width:960px;
+            font-weight:500;letter-spacing:0.03em;
+        }
+        .slogan .dash{color:#81d4fa;margin:0 0.15em;}
+        .btn-group{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);z-index:99;}
+        button{padding:12px 28px;background:#2196f3;border:none;color:#fff;border-radius:8px;font-size:16px;margin:0 8px;cursor:pointer;transition:0.3s;}
+        button:hover{background:#1976d2;}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:30px;max-width:1200px;}
+        .card{background:#121a29;padding:24px;border-radius:12px;border:1px solid #233554;}
+        /* 页码：第一页、第二页… */
+        .page-indicator{
+            position:fixed;top:24px;right:28px;z-index:100;
+            font-size:14px;letter-spacing:0.06em;color:#81d4fa;
+            padding:8px 16px;border-radius:999px;border:1px solid rgba(79,195,247,0.35);
+            background:rgba(18,26,41,0.92);backdrop-filter:blur(8px);
+            box-shadow:0 4px 24px rgba(0,0,0,0.25);
+        }
+        /* —— 竞品分析页 —— */
+        .slide-compare{
+            justify-content:flex-start;padding-top:44px;padding-bottom:100px;overflow-y:auto;
+            align-items:center;
+        }
+        .compare-inner{max-width:1180px;width:100%;margin:0 auto;}
+        .compare-lead{
+            font-size:17px;color:#94a3b8;max-width:920px;margin-bottom:20px;line-height:1.65;
+            border-left:3px solid #4fc3f7;padding-left:16px;
+        }
+        .compare-pills{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:26px;}
+        .compare-pills span{
+            font-size:12px;padding:6px 12px;border-radius:8px;background:#121a29;border:1px solid #2a3f5c;color:#94a3b8;
+        }
+        .compare-pills span strong{color:#4fc3f7;font-weight:600;}
+        .compare-three{
+            display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:22px;
+        }
+        @media(max-width:1024px){.compare-three{grid-template-columns:1fr;}}
+        .compare-block{
+            background:linear-gradient(165deg,rgba(18,26,41,.95),rgba(10,14,23,.98));
+            border:1px solid #233554;border-radius:14px;padding:20px 20px 18px;
+            position:relative;overflow:hidden;
+        }
+        .compare-block::before{
+            content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:14px 14px 0 0;
+        }
+        .compare-block--risk::before{background:linear-gradient(90deg,#f59e0b,#ef4444);}
+        .compare-block--win::before{background:linear-gradient(90deg,#22c55e,#4fc3f7);}
+        .compare-block--essence::before{background:linear-gradient(90deg,#a78bfa,#4fc3f7);}
+        .compare-block h3{
+            font-size:15px;color:#e2e8f0;margin-bottom:12px;letter-spacing:0.04em;
+            display:flex;align-items:center;gap:8px;
+        }
+        .compare-block h3 .num{
+            display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
+            border-radius:8px;font-size:12px;font-weight:700;background:rgba(79,195,247,.15);color:#4fc3f7;
+        }
+        .compare-block--risk h3 .num{background:rgba(245,158,11,.15);color:#fbbf24;}
+        .compare-block p,.compare-block li{font-size:14px;line-height:1.72;color:#cbd5e1;margin-bottom:10px;}
+        .compare-block ul{margin:0;padding-left:18px;}
+        .compare-block li{margin:6px 0;}
+        sup.ref{font-size:10px;color:#64748b;font-weight:600;vertical-align:super;margin-left:1px;}
+        .compare-vs-note{
+            text-align:center;font-size:12px;color:#64748b;margin:8px 0 4px;letter-spacing:0.12em;
+        }
+        .compare-foot{
+            font-size:16px;color:#81d4fa;text-align:center;margin-top:8px;padding:16px 20px;
+            background:rgba(79,195,247,.06);border-radius:12px;border:1px dashed rgba(79,195,247,.25);
+            line-height:1.7;max-width:920px;margin-left:auto;margin-right:auto;
+        }
+        .compare-refs{
+            margin-top:14px;font-size:11px;color:#64748b;line-height:1.6;max-width:920px;margin-left:auto;margin-right:auto;
+        }
+        /* —— 晋江 vs 郴郴 竞品页 —— */
+        .slide-jj{justify-content:flex-start;padding-top:40px;padding-bottom:100px;overflow-y:auto;align-items:center;}
+        .jj-wrap{max-width:1240px;width:100%;margin:0 auto;padding:0 8px;}
+        .jj-lead{
+            font-size:16px;line-height:1.65;color:#94a3b8;margin-bottom:18px;max-width:980px;
+            border-left:3px solid #f472b6;padding-left:14px;
+        }
+        .jj-lead strong{color:#f9a8d4;font-weight:600;}
+        .jj-section-title{
+            font-size:17px;color:#4fc3f7;margin:26px 0 12px;padding-bottom:6px;
+            border-bottom:1px solid rgba(79,195,247,.25);letter-spacing:0.02em;
+        }
+        .jj-table-wrap{
+            overflow-x:auto;margin:6px 0 8px;border-radius:14px;border:1px solid #2a3f5c;
+            background:rgba(18,26,41,.65);
+        }
+        .jj-table{width:100%;border-collapse:collapse;font-size:13px;min-width:780px;}
+        .jj-table th,.jj-table td{padding:11px 14px;border-bottom:1px solid #2a3f5c;text-align:left;vertical-align:top;}
+        .jj-table th{background:linear-gradient(180deg,#1a2438,#121a29);color:#81d4fa;font-weight:600;font-size:12px;}
+        .jj-table tr:last-child td{border-bottom:none;}
+        .jj-table td:first-child{color:#e2e8f0;font-weight:600;width:11%;white-space:nowrap;background:rgba(10,14,23,.35);}
+        .jj-table td:nth-child(2){color:#cbd5e1;max-width:260px;}
+        .jj-table td:nth-child(3){color:#cbd5e1;max-width:260px;}
+        .jj-table td:nth-child(4){
+            color:#bbf7d0;background:rgba(34,197,94,.07);border-left:1px solid rgba(34,197,94,.2);font-size:12px;line-height:1.65;
+        }
+        .jj-grid2{
+            display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px;
+        }
+        @media(max-width:900px){.jj-grid2{grid-template-columns:1fr;}}
+        .jj-card{
+            border-radius:14px;padding:18px 18px 14px;border:1px solid #233554;
+            background:linear-gradient(165deg,rgba(18,26,41,.92),rgba(10,14,23,.96));
+        }
+        .jj-card--pain{border-top:3px solid #f472b6;}
+        .jj-card--sol{border-top:3px solid #4fc3f7;}
+        .jj-card h4{font-size:14px;margin-bottom:10px;color:#f9a8d4;}
+        .jj-card--sol h4{color:#81d4fa;}
+        .jj-card ul{margin:0;padding-left:18px;}
+        .jj-card li{font-size:13px;line-height:1.68;color:#cbd5e1;margin:7px 0;}
+        .jj-mini2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;}
+        @media(max-width:900px){.jj-mini2{grid-template-columns:1fr;}}
+        .jj-mini2 .jj-card{border-top-width:2px;}
+        .jj-mini2 h4{font-size:13px;color:#94a3b8;margin-bottom:8px;}
+        .jj-mini2 li{font-size:12px;}
+        .jj-disclaimer{margin-top:20px;font-size:11px;color:#64748b;line-height:1.65;max-width:980px;}
+    </style>
+</head>
+<body>
+<div id="pageIndicator" class="page-indicator" aria-live="polite">第一页</div>
+<div class="deck">
+    <!-- 1 封面 -->
+    <div class="slide active" id="s1">
+        <h1>郴郴文库 · 全球创作者主权平台</h1>
+        <p class="slogan">郴郴文库<span class="dash">——</span>原创内容的森林<span class="highlight">（小说、同人、漫画、散文、诗歌等等）</span></p>
+        <h2>香港Web3 + AI创作 + 去中心化版权生态</h2>
+        <div>
+            <span class="tag">Web3合规支付</span>
+            <span class="tag">AI原生编辑器</span>
+            <span class="tag">千人千面防盗溯源</span>
+            <span class="tag">0抽成 · 版权归作者</span>
+        </div>
+        <p style="margin-top:40px;font-size:20px;">终结平台霸权 · 解放创作者 · 重构全球内容产业</p>
+    </div>
+
+    <!-- 2 行业痛点 -->
+    <div class="slide" id="s2">
+        <h1>行业百年顽疾</h1>
+        <div class="grid">
+            <div class="card">
+                <h2>创作者端</h2>
+                <ul>
+                    <li>独家霸王合同，锁死版权（夏达案例）</li>
+                    <li>平台抽成50%-80%，血汗被收割</li>
+                    <li>卡文无辅助，创作效率极低</li>
+                    <li>多语言发行难，赚不到全球收益</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h2>读者端</h2>
+                <ul>
+                    <li>付费怕烂尾，资金无保障</li>
+                    <li>盗版泛滥，优质内容流失</li>
+                    <li>看不懂海外原著，翻译滞后</li>
+                    <li>无法永久收藏优质创作</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3 竞品分析：免费阅读平台 vs 付费创作平台 -->
+    <div class="slide slide-compare" id="s3">
+        <div class="compare-inner">
+            <h1>竞品视角：流量型免费 vs 契约型付费</h1>
+            <p class="compare-lead">
+                以番茄小说等「免费阅读 + 广告」平台为典型代表，其商业重心与郴郴文库所坚持的「读者为作品付费、作者保有主权」路径，会从底层改写作者的激励机制——这也是业界常见的「连载易弃坑」与「愿意完本」分化的重要原因。以下从三个层面归纳逻辑差异（论述综合公开信息与行业观察，角标为内部引用序号）。
+            </p>
+            <div class="compare-pills">
+                <span><strong>对照一</strong> 番茄系：广告与时长驱动</span>
+                <span><strong>对照二</strong> 郴郴文库：付费质量 + 履约保障</span>
+                <span><strong>结论</strong> 模式决定创作是否「短跑化」</span>
+            </div>
+            <p class="compare-vs-note">三个观察维度</p>
+            <div class="compare-three">
+                <div class="compare-block compare-block--risk">
+                    <h3><span class="num">1</span> 免费流量模式的内在张力</h3>
+                    <ul>
+                        <li>平台收入高度依赖广告曝光与用户停留，作者侧分成常与「流量、补贴与活动」挂钩，而非单一作品的完整交付质量<sup class="ref">4</sup>。</li>
+                        <li>当作品数据回落、推荐减弱时，继续精耕长篇的边际收益下降，「换坑追热点」往往比熬完一本更理性——断更、烂尾的概率随之抬升<sup class="ref">3</sup><sup class="ref">6</sup>。</li>
+                        <li>低门槛试读 + 强算法分发，使读者切换成本偏低；新书易获曝光、旧作易被遗忘，也会倒逼作者频繁开新书、弱化对单部长线的长期经营<sup class="ref">4</sup>。</li>
+                    </ul>
+                </div>
+                <div class="compare-block compare-block--win">
+                    <h3><span class="num">2</span> 郴郴文库付费逻辑的长线优势</h3>
+                    <ul>
+                        <li>读者为「可读、可信赖的内容与更新」付费，作者激励与作品口碑、完本意愿更一致；收益归作者、平台 0 抽创作分成，减少为算法扭曲故事结构的动机<sup class="ref">5</sup>。</li>
+                        <li>「烂尾可触发退款 / 赔付」类规则，把读者资金安全与作者信誉绑定，促使双方回到「把故事写完、写好」的共同目标<sup class="ref">7</sup>。</li>
+                        <li>更易形成正向飞轮：用心创作 → 读者愿持续付费 → 作者获得稳定回报 → 继续投入品质与完结保障。</li>
+                    </ul>
+                </div>
+                <div class="compare-block compare-block--essence">
+                    <h3><span class="num">3</span> 两种模式的本质分野</h3>
+                    <ul>
+                        <li><strong class="highlight">流量优先</strong>：作品更接近获取广告库存与用户时长的「载体」，创作决策易受平台规则与当期热度牵引<sup class="ref">4</sup>。</li>
+                        <li><strong class="highlight">契约与主权优先</strong>：以 AI 赋能、版权保护与链上结算为基础设施，让作者掌握创作节奏与收益归属，读者用钱投票「值得追完的作品」<sup class="ref">5</sup>。</li>
+                        <li>简言之：前者偏「短跑与试错」，后者更有利于守护长篇所需耐心——这正是郴郴文库希望从机制上削弱「番茄式烂尾」土壤的出发点。</li>
+                    </ul>
+                </div>
+            </div>
+            <p class="compare-foot">
+                一句话收束：免费阅读容易把创作推向急功近利；付费与确权把「质量、完结与信誉」写回商业闭环——这不是道德褒贬，而是<strong>激励机制不同</strong>带来的结构性结果。
+            </p>
+            <p class="compare-refs">
+                注：上标 <sup class="ref">3</sup>–<sup class="ref">7</sup> 为路演材料引用编号；对外发布或融资前请结合各平台最新财报、合同条款与产品规则再次核验。
+            </p>
+        </div>
+    </div>
+
+    <!-- 4 竞品分析：郴郴文库 vs 晋江（「老天奶」舆情视角） -->
+    <div class="slide slide-jj" id="s4">
+        <div class="jj-wrap">
+            <h1>郴郴文库 vs 晋江文学城</h1>
+            <p class="jj-lead">
+                <strong>核心结论：</strong>晋江是国内成熟的女频内容与 IP 工厂，但以<strong>中心化治理、订阅高分成、强审核与版权集中运营</strong>为特征；郴郴文库定位为 <strong>Web3 + AI 原生</strong>的创作与确权基建，强调 <strong>0 抽成内容分成、创作者主权、不审核（仅校验原创，非原创内容无法在平台发布）与链上可追溯规则</strong>。近年围绕禁词尺度与社区沟通的舆情（民间戏称<strong>「老天奶」事件</strong>）放大了「规则解释权」「利益结构」「用户申诉」三类矛盾——这正是郴郴希望在机制上区隔的破局点。以下内容据公开报道与行业观察整理，<strong>非法律意见</strong>，对外需更新核实。
+            </p>
+
+            <h2 class="jj-section-title">一、基础定位与核心差异（速览）</h2>
+            <div class="jj-table-wrap">
+                <table class="jj-table">
+                    <thead>
+                        <tr>
+                            <th>对比维度</th>
+                            <th>晋江文学城</th>
+                            <th>郴郴文库</th>
+                            <th>郴郴差异化</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>平台定位</td>
+                            <td>成熟女频网文与 IP 孵化平台，阅文生态内偏中心化运营。</td>
+                            <td>Web3 + AI 创作 / 确权基础设施，全球支付与工具赋能。</td>
+                            <td>弱化「平台替作者定价权」，强调技术与合约中立。</td>
+                        </tr>
+                        <tr>
+                            <td>核心用户</td>
+                            <td>海量女频读者 + 签约作者生态（公开数据量级：百万级作者、千万级用户）。</td>
+                            <td>重视版权与分成的作者、愿为履约付费的读者、Web3 原生用户。</td>
+                            <td>可承接对「分成、审核、治理」敏感的高意愿创作者与读者。</td>
+                        </tr>
+                        <tr>
+                            <td>内容生态</td>
+                            <td>题材全、IP 转化强；审核与内容管理链条长、尺度细则多。</td>
+                            <td>垂直冷启动 + AI 生产力工具；<strong>不审核</strong>，只查是否原创，非原创内容无法在平台发布。</td>
+                            <td>杜绝「词表式」创作干预；原创门槛清晰、非原创不可上架。</td>
+                        </tr>
+                        <tr>
+                            <td>商业模式</td>
+                            <td>订阅与增值服务分成（常见结构：平台与作者分享流水）+ IP 全链路运营。</td>
+                            <td>读者付费 <strong>直达作者</strong>；平台收入侧重 AI 订阅、POD 工本、撮合服务费等。</td>
+                            <td><strong>不拿内容分成作主要利润</strong>，与作者利益同向。</td>
+                        </tr>
+                        <tr>
+                            <td>治理模式</td>
+                            <td>总部与运营团队定规则、强执行；对外沟通易被解读为「一言堂」。</td>
+                            <td>规则可公示、关键变更可溯源（链上记录）；社群共治为长期目标。</td>
+                            <td>用<strong>可审计</strong>替代「事后解释」，缓解双标争议。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 class="jj-section-title">二、「老天奶」舆情折射的痛点 ↔ 郴郴机制回应</h2>
+            <div class="jj-grid2">
+                <div class="jj-card jj-card--pain">
+                    <h4>晋江侧：事件集中暴露的结构性张力</h4>
+                    <ul>
+                        <li><strong>审核与表达：</strong>禁词、方言与营销话术是否「一刀切」，易被质疑双标；删评、锁讨论损害程序感。</li>
+                        <li><strong>规则稳定性：</strong>表述微调（如从「严禁」到「严禁强迫」）若缺乏充分说明，会放大不信任。</li>
+                        <li><strong>利益结构：</strong>高比例分成与 IP 集中运营，使作者感到「增值在平台、风险在作者」。</li>
+                        <li><strong>用户关系：</strong>大规模开票、维权与公关话术若对立，会严重损耗公众信任。</li>
+                        <li><strong>治理闭环：</strong>决策过程外显不足时，舆情很难仅靠声明平息。</li>
+                    </ul>
+                </div>
+                <div class="jj-card jj-card--sol">
+                    <h4>郴郴侧：针对性设计（产品化立场）</h4>
+                    <ul>
+                        <li><strong>不审核，只查是否原创：</strong>不对创作表达做内容审核；仅校验原创性，<strong>非原创内容无法在平台发布</strong>。</li>
+                        <li><strong>规则透明：</strong>重大规则变动留存链上或版本化记录，减少「朝令夕改却无法求证」。</li>
+                        <li><strong>0 抽成 + 主权：</strong>订阅/打赏合约路径清晰；版权归属作者，平台不签霸王条款。</li>
+                        <li><strong>双边契约：</strong>烂尾退款、更新承诺等用合约自动化，替代情绪型公关。</li>
+                        <li><strong>盈利解耦：</strong>平台赚工具与服务，不靠挤压作者分成生存——利益与家长制平台天然不同。</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h2 class="jj-section-title">三、商业模式与增长逻辑（对照）</h2>
+            <div class="jj-mini2">
+                <div class="jj-card jj-card--pain">
+                    <h4>晋江：规模化内容工业</h4>
+                    <ul>
+                        <li>收入：订阅分成 + IP 授权 / 出版 / 衍生全链路。</li>
+                        <li>成本：大审核团队、带宽与版权运营、签约与营销投放。</li>
+                        <li>增长：头部作品与渠道强度驱动；遇影视周期与舆情时需付额外信任成本。</li>
+                    </ul>
+                </div>
+                <div class="jj-card jj-card--sol">
+                    <h4>郴郴：工具 + 合约基础设施</h4>
+                    <ul>
+                        <li>收入：AI 能力订阅、POD 工本、IP 撮合佣金、跨境分发服务费等（<strong>不抽作品内容税</strong>）。</li>
+                        <li>成本：研发与轻运营为主，无需「买断内容库存」。</li>
+                        <li>增长：先 500–2000 核心创作者口碑闭环，再向全球创作者外溢。</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h2 class="jj-section-title">四、生态、粘性、技术与合规（摘要）</h2>
+            <div class="jj-mini2">
+                <div class="jj-card">
+                    <h4>晋江</h4>
+                    <ul>
+                        <li>优势：IP 爆款与高壁垒内容池；读者基数巨大。</li>
+                        <li>挑战：审核—创作自由度—社区情绪的三角摩擦；税务与合规易被舆论放大镜审视。</li>
+                        <li>粘性：内容数量护城河强，但信任事件会促成用户迁移试错。</li>
+                    </ul>
+                </div>
+                <div class="jj-card">
+                    <h4>郴郴文库</h4>
+                    <ul>
+                        <li>优势：AI 大纲 / 推演 / 多语言、动态防泄露；<strong>付费 + 退款</strong>闭环抬高诚信预期。</li>
+                        <li>短期：冷启动内容厚度不足，需要用工具和主权故事换时间。</li>
+                        <li>技术与合规：香港 Web3 友好支付实验场 + 链上确权与合约自动结算，降低「暗箱」疑虑。</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p class="jj-disclaimer">
+                说明：未逐条引用微博、公告原文；涉及用户规模、分成比例等仅为公开报道中的<strong>常见描述</strong>，实际以各平台最新协议与财报为准。「老天奶」为市民间对舆情话题的戏称，不代表任何司法或官方定性。路演材料请勿作投资建议。
+            </p>
+        </div>
+    </div>
+
+    <!-- 5 核心解决方案 -->
+    <div class="slide" id="s5">
+        <h1>我们的颠覆性解决方案</h1>
+        <ul>
+            <li><span class="highlight">AI专属创作编辑器</span>：对标Cursor，专为作者打造；自动存档、大纲管理、卡文直连MiroFish剧情推演</li>
+            <li><span class="highlight">千人千面动态内容</span>：每位读者看到AI微调专属版本，隐形水印溯源，彻底封死盗版</li>
+            <li><span class="highlight">香港Web3合规支付</span>：0平台抽成，收益直达作者钱包；全球多币种秒结算</li>
+            <li><span class="highlight">全链路版权自治</span>：不签约、不锁人、不夺版权；烂尾自动全额退款，保障读者权益</li>
+            <li><span class="highlight">多语言一键全球分发</span>：单语种创作，自动覆盖全球读者池</li>
+        </ul>
+    </div>
+
+    <!-- 6 差异化壁垒 -->
+    <div class="slide" id="s6">
+        <h1>独家壁垒 · 同行无法复刻</h1>
+        <div class="grid">
+            <div class="card">
+                <h2>传统平台</h2>
+                <p>靠合同锁版权、靠抽成盈利、靠流量垄断、内容可下载易盗版、割裂AI创作</p>
+            </div>
+            <div class="card">
+                <h2>郴郴文库</h2>
+                <p>仅做技术基础设施、不碰创作收益；动态内容防泄露；AI全链路赋能；香港合规全球支付闭环</p>
+            </div>
+        </div>
+        <p style="margin-top:30px;">核心红线：<span class="highlight">永久关闭电子书/可导出文件</span>，仅开放实体书收藏周边，绝不破坏防伪溯源核心体系</p>
+    </div>
+
+    <!-- 7 产品生态闭环 -->
+    <div class="slide" id="s7">
+        <h1>全生态业务闭环</h1>
+        <ul>
+            <li>创作层：AI编辑器 + MiroFish剧情辅助 + 数据看板（热门题材/留存分析）</li>
+            <li>分发层：多语言全球发布 + 私域引流 + 短视频AI文案生成</li>
+            <li>变现层：读者付费直结 + 实体书POD按需印刷（收藏周边）+ AI工具订阅</li>
+            <li>保障层：智能更新履约 + 烂尾自动退款 + 全链路盗版溯源</li>
+        </ul>
+    </div>
+
+    <!-- 8 商业模式 -->
+    <div class="slide" id="s8">
+        <h1>轻量化健康盈利模式</h1>
+        <ul>
+            <li>✅ AI创作工具订阅费（核心稳定收入）</li>
+            <li>✅ 实体书按需印刷服务费（不赚版权差价）</li>
+            <li>✅ IP撮合导流服务费（小说转漫画/短剧对接）</li>
+            <li>❌ 不抽创作收益、不买断版权、不收割作者</li>
+        </ul>
+        <p class="highlight">纯工具赋能盈利，与作者深度利益绑定，实现自裂变增长</p>
+    </div>
+
+    <!-- 9 落地进度 & 规划 -->
+    <div class="slide" id="s9">
+        <h1>落地进度 & 发展规划</h1>
+        <ul>
+            <li>现有基底：香港高才通创业资质、Web3支付资源、安全风控底层能力、AI对接经验</li>
+            <li>短期（2个月）：完成核心MVP（编辑器+履约规则+防伪+基础支付）</li>
+            <li>中期：冷启动种子作者运营、多语言全量上线、实体书周边对接</li>
+            <li>长期：覆盖全球三分之二创作者，成为内容产业底层基础设施</li>
+        </ul>
+    </div>
+
+    <!-- 10 收尾愿景 -->
+    <div class="slide" id="s10">
+        <h1>愿景：重构全球创作规则</h1>
+        <p>终结多年版权剥削、平台霸权、盗版泛滥的行业乱象</p>
+        <p>让每一位创作者：拥有版权、掌控收益、面向全球、自由创作</p>
+        <p style="font-size:22px;margin-top:40px;color:#4fc3f7;">郴郴文库 — 属于全世界创作者的主权生态</p>
+    </div>
+</div>
+
+<div class="btn-group">
+    <button onclick="prevSlide()">上一页</button>
+    <button onclick="nextSlide()">下一页</button>
+</div>
+
+<script>
+    let current = 1;
+    const total = 10;
+    const PAGE_LABELS = ['第一页','第二页','第三页','第四页','第五页','第六页','第七页','第八页','第九页','第十页'];
+    function pageLabel(n){
+        return PAGE_LABELS[Math.max(0, Math.min(n - 1, total - 1))] || ('第' + n + '页');
+    }
+    function showSlide(n){
+        document.querySelectorAll('.slide').forEach(s=>s.classList.remove('active'));
+        document.getElementById('s'+n).classList.add('active');
+        var el = document.getElementById('pageIndicator');
+        if (el) el.textContent = pageLabel(n);
+    }
+    function nextSlide(){
+        current = current >= total ? 1 : current+1;
+        showSlide(current);
+    }
+    function prevSlide(){
+        current = current <=1 ? total : current-1;
+        showSlide(current);
+    }
+</script>
+</body>
+</html>

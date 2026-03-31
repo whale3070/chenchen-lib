@@ -8,8 +8,12 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* 系统栈：避免 /__nextjs_font/* 在部分 Nginx 规则下 403 */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -22,5 +26,30 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* Tiptap：推演面板打开时锁定的选区（失焦后仍可见） */
+.ProseMirror .selection-lock-highlight {
+  border-radius: 2px;
+  background-color: rgba(251, 191, 36, 0.38);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.45);
+}
+
+@media (prefers-color-scheme: dark) {
+  .ProseMirror .selection-lock-highlight {
+    background-color: rgba(251, 191, 36, 0.22);
+    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.35);
+  }
+}
+
+.ProseMirror .selection-lock-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  margin: 0 1px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background-color: rgb(245, 158, 11);
+  pointer-events: none;
 }

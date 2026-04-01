@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { autoFormatChaptersForPublish } from "@/lib/server/deepseek-publish-format";
 import type { NovelPublishRecord } from "@/lib/novel-publish";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -187,6 +188,19 @@ function parseTags(raw: unknown): string[] {
     .slice(0, 50);
 }
 
+function parseChapterIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((x): x is string => typeof x === "string")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 200);
+}
+
+function normalizeLayoutMode(raw: unknown): "preserve" | "ai_reflow" {
+  return raw === "ai_reflow" ? "ai_reflow" : "preserve";
+}
+
 /** 保存发布配置 或 action:withdraw */
 export async function POST(req: NextRequest) {
   const wh = parseWalletHeader(req);
@@ -212,11 +226,81 @@ export async function POST(req: NextRequest) {
   if (!novelId) return badRequest("Missing novelId");
 
   const novels = await readAuthorNovelList(wh.walletLower);
-  if (!novels.some((n) => n.id === novelId)) {
+  const currentNovel = novels.find((n) => n.id === novelId);
+  if (!currentNovel) {
     return NextResponse.json({ error: "未找到该小说" }, { status: 404 });
   }
 
   const action = o.action === "withdraw" ? "withdraw" : "publish";
+
+  if (o.action === "toggle_chapter") {
+    const chapterId = typeof o.chapterId === "string" ? o.chapterId.trim() : "";
+    if (!chapterId) return badRequest("Missing chapterId");
+    const publish = o.publish !== false;
+
+    const existing = await readPublishRecord(wh.walletLower, novelId);
+    if (!existing) {
+      return badRequest("请先完成整本发布配置，再按章节发布");
+    }
+    if (existing.visibility !== "public") {
+      return badRequest("当前作品未公开，无法按章节发布");
+    }
+
+    const layoutMode = normalizeLayoutMode(o.layoutMode ?? existing.layoutMode);
+
+    const current = new Set(parseChapterIds(existing.publishedChapterIds));
+    if (publish) {
+      if (layoutMode === "ai_reflow") {
+        await autoFormatChaptersForPublish({
+          authorLower: wh.walletLower,
+          novelId,
+          chapterIds: [chapterId],
+        });
+      }
+      current.add(chapterId);
+    } else {
+      current.delete(chapterId);
+    }
+
+    const next: NovelPublishRecord = {
+      ...existing,
+      publishedChapterIds: Array.from(current),
+      layoutMode,
+      publishedAt: existing.publishedAt || new Date().toISOString(),
+    };
+    await writePublishRecord(next);
+    return NextResponse.json({ record: next, ok: true });
+  }
+
+  if (o.action === "publish_all_chapters") {
+    const allChapterIds = parseChapterIds(o.allChapterIds);
+    if (allChapterIds.length === 0) {
+      return badRequest("Missing allChapterIds");
+    }
+    const existing = await readPublishRecord(wh.walletLower, novelId);
+    if (!existing) {
+      return badRequest("请先完成整本发布配置，再按章节发布");
+    }
+    const layoutMode = normalizeLayoutMode(o.layoutMode ?? existing.layoutMode);
+    if (existing.visibility !== "public") {
+      return badRequest("当前作品未公开，无法发布章节");
+    }
+    if (layoutMode === "ai_reflow") {
+      await autoFormatChaptersForPublish({
+        authorLower: wh.walletLower,
+        novelId,
+        chapterIds: allChapterIds,
+      });
+    }
+    const next: NovelPublishRecord = {
+      ...existing,
+      publishedChapterIds: allChapterIds,
+      layoutMode,
+      publishedAt: existing.publishedAt || new Date().toISOString(),
+    };
+    await writePublishRecord(next);
+    return NextResponse.json({ record: next, ok: true });
+  }
 
   if (action === "withdraw") {
     const existing = await readPublishRecord(wh.walletLower, novelId);
@@ -242,8 +326,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ record: next, ok: true });
   }
 
-  const title = typeof o.title === "string" ? o.title.trim().slice(0, 300) : "";
-  if (!title) return badRequest("请填写小说标题");
+  const title = currentNovel.title.trim().slice(0, 300);
+  if (!title) return badRequest("小说标题为空，请先在小说设置中填写标题");
   const synopsis =
     typeof o.synopsis === "string" ? o.synopsis.trim().slice(0, 5000) : "";
 
@@ -287,9 +371,15 @@ export async function POST(req: NextRequest) {
   }
 
   const tags = parseTags(o.tags);
+  const allChapterIds = parseChapterIds(o.allChapterIds);
+  const layoutMode = normalizeLayoutMode(o.layoutMode);
 
   const existing = await readPublishRecord(wh.walletLower, novelId);
   const articleId = existing?.articleId ?? (await allocateArticleId());
+  const publishedChapterIds =
+    parseChapterIds(existing?.publishedChapterIds).length > 0
+      ? parseChapterIds(existing?.publishedChapterIds)
+      : allChapterIds;
 
   const record: NovelPublishRecord = {
     articleId,
@@ -304,9 +394,19 @@ export async function POST(req: NextRequest) {
     priceAmount: paymentMode === "paid" ? priceAmount : "",
     updateCommitment,
     refundRuleAck,
+    publishedChapterIds,
+    layoutMode,
     publishedAt: new Date().toISOString(),
     withdrawnAt: null,
   };
+
+  if (visibility === "public" && layoutMode === "ai_reflow") {
+    await autoFormatChaptersForPublish({
+      authorLower: wh.walletLower,
+      novelId,
+      chapterIds: allChapterIds,
+    });
+  }
 
   await writePublishRecord(record);
   return NextResponse.json({ record, ok: true });

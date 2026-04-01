@@ -7,6 +7,8 @@ import type { PlotNode } from "@chenchen/shared/types";
 
 import { flatToOutlineTree, type PlotOutlineNode } from "@/lib/plot-outline";
 
+export type PublishLayoutMode = "preserve" | "ai_reflow";
+
 /** 持久化到 /api/v1/novel-publish 的配置体 */
 export type NovelPublishRecord = {
   /** 发布时分配的对外文章 ID（随机） */
@@ -25,6 +27,10 @@ export type NovelPublishRecord = {
   updateCommitment: "none" | number;
   /** 选择周更时勾选烂尾退款承诺 */
   refundRuleAck: boolean;
+  /** 已发布章节 ID 列表；为空或缺失时默认全部章节可见（兼容旧数据） */
+  publishedChapterIds?: string[];
+  /** 发布排版策略：保留原排版 | AI 文本重排 */
+  layoutMode?: PublishLayoutMode;
   publishedAt: string;
   withdrawnAt?: string | null;
 };

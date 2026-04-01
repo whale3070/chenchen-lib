@@ -8,7 +8,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
 
-import type { NovelPublishRecord } from "@/lib/novel-publish";
+import type { NovelPublishRecord, PublishLayoutMode } from "@/lib/novel-publish";
 
 const COPYRIGHT_TEXT =
   "本作品版权100%归作者所有，郴郴文库仅提供技术服务，不抽成、不买断、不干涉创作";
@@ -18,12 +18,16 @@ type Currency = "HKD" | "USD" | "CNY";
 export type PublishNovelModalProps = {
   open: boolean;
   onClose: () => void;
-  initialTitle: string;
+  novelTitle: string;
   initialSynopsis: string;
   initialTags: string[];
   savedRecord: NovelPublishRecord | null;
+  onAutoFillMeta: () => Promise<{
+    synopsis: string;
+    tags: string[];
+    generatedBy: "deepseek" | "fallback";
+  }>;
   onConfirm: (payload: {
-    title: string;
     synopsis: string;
     tags: string[];
     visibility: "private" | "public";
@@ -32,6 +36,7 @@ export type PublishNovelModalProps = {
     priceAmount: string;
     updateCommitment: "none" | number;
     refundRuleAck: boolean;
+    layoutMode: PublishLayoutMode;
   }) => Promise<void>;
 };
 
@@ -42,15 +47,14 @@ const fieldClass =
 export function PublishNovelModal({
   open,
   onClose,
-  initialTitle,
+  novelTitle,
   initialSynopsis,
   initialTags,
   savedRecord,
+  onAutoFillMeta,
   onConfirm,
 }: PublishNovelModalProps) {
-  const [title, setTitle] = useState("");
   const [synopsis, setSynopsis] = useState("");
-  const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [visibility, setVisibility] = useState<"private" | "public">("private");
   const [paymentMode, setPaymentMode] = useState<"free" | "paid">("free");
@@ -59,12 +63,16 @@ export function PublishNovelModal({
   const [commitMode, setCommitMode] = useState<"none" | "weekly">("none");
   const [weeklyN, setWeeklyN] = useState(3);
   const [refundRuleAck, setRefundRuleAck] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<PublishLayoutMode>("preserve");
+  const [metaGeneratedBy, setMetaGeneratedBy] = useState<"deepseek" | "fallback" | null>(
+    null,
+  );
+  const [metaGenerating, setMetaGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     if (savedRecord) {
-      setTitle(savedRecord.title);
       setSynopsis(savedRecord.synopsis);
       setTags(savedRecord.tags ?? []);
       setVisibility(savedRecord.visibility);
@@ -78,8 +86,9 @@ export function PublishNovelModal({
         setWeeklyN(savedRecord.updateCommitment);
       }
       setRefundRuleAck(savedRecord.refundRuleAck);
+      setLayoutMode(savedRecord.layoutMode ?? "preserve");
+      setMetaGeneratedBy(null);
     } else {
-      setTitle(initialTitle);
       setSynopsis(initialSynopsis);
       setTags(
         initialTags
@@ -93,25 +102,42 @@ export function PublishNovelModal({
       setCommitMode("none");
       setWeeklyN(3);
       setRefundRuleAck(false);
+      setLayoutMode("preserve");
+      setMetaGeneratedBy(null);
     }
-  }, [open, savedRecord, initialTitle, initialSynopsis, initialTags]);
+  }, [open, savedRecord, initialSynopsis, initialTags]);
 
-  const addTag = useCallback(() => {
-    const t = tagInput.replace(/^#+/, "").trim();
-    if (!t || tags.includes(t) || tags.length >= 20) return;
-    setTags((x) => [...x, t]);
-    setTagInput("");
-  }, [tagInput, tags]);
+  const autoFillMeta = useCallback(async () => {
+    setMetaGenerating(true);
+    try {
+      const data = await onAutoFillMeta();
+      setSynopsis((data.synopsis ?? "").trim().slice(0, 5000));
+      setTags(
+        (data.tags ?? [])
+          .map((t) => t.replace(/^#+/, "").trim())
+          .filter(Boolean)
+          .slice(0, 12),
+      );
+      setMetaGeneratedBy(data.generatedBy);
+    } finally {
+      setMetaGenerating(false);
+    }
+  }, [onAutoFillMeta]);
 
-  const removeTag = useCallback((t: string) => {
-    setTags((x) => x.filter((a) => a !== t));
-  }, []);
+  useEffect(() => {
+    if (!open) return;
+    if (savedRecord) return;
+    const hasMeta = synopsis.trim().length > 0 || tags.length > 0;
+    if (hasMeta) return;
+    void autoFillMeta();
+    // intentionally only react to modal open + init state
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, savedRecord]);
 
   const handleConfirm = async () => {
     setSubmitting(true);
     try {
       await onConfirm({
-        title: title.trim(),
         synopsis: synopsis.trim(),
         tags,
         visibility,
@@ -120,6 +146,7 @@ export function PublishNovelModal({
         priceAmount: paymentMode === "paid" ? priceAmount.trim() : "",
         updateCommitment: commitMode === "none" ? "none" : weeklyN,
         refundRuleAck: commitMode === "weekly" ? refundRuleAck : false,
+        layoutMode,
       });
       onClose();
     } catch (e) {
@@ -174,60 +201,48 @@ export function PublishNovelModal({
                   基础信息
                 </p>
                 <label className="mt-3 block text-xs text-zinc-400">
-                  小说标题
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className={fieldClass}
-                    placeholder="如：第一卷·匿名信"
-                  />
-                </label>
-                <label className="mt-3 block text-xs text-zinc-400">
-                  小说简介
-                  <textarea
-                    value={synopsis}
-                    onChange={(e) => setSynopsis(e.target.value)}
-                    rows={3}
-                    className={fieldClass + " resize-y min-h-[72px]"}
-                    placeholder="卷的简述…"
-                  />
-                </label>
-                <div className="mt-3">
-                  <span className="text-xs text-zinc-400">小说标签</span>
-                  <div className="mt-1 flex flex-wrap gap-1.5">
-                    {tags.map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => removeTag(t)}
-                        className="rounded-full border border-[#4fc3f7]/35 bg-[#0a0e17] px-2 py-0.5 text-[11px] text-[#4fc3f7] transition hover:bg-[#4fc3f7]/15"
-                      >
-                        #{t} ×
-                      </button>
-                    ))}
+                  作品标题（统一使用新建作品标题）
+                  <div className={fieldClass + " select-text text-zinc-300"}>
+                    {novelTitle || "未命名作品"}
                   </div>
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      type="text"
-                      value={tagInput}
-                      onChange={(e) => setTagInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          addTag();
-                        }
-                      }}
-                      className={fieldClass + " flex-1"}
-                      placeholder="输入标签回车添加"
-                    />
-                    <button
-                      type="button"
-                      onClick={addTag}
-                      className="shrink-0 rounded-lg border border-[#4fc3f7]/40 px-3 py-2 text-xs text-[#4fc3f7] hover:bg-[#4fc3f7]/10"
-                    >
-                      添加
-                    </button>
+                </label>
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <span className="text-xs text-zinc-400">作品简介（DeepSeek 自动生成）</span>
+                  <button
+                    type="button"
+                    disabled={metaGenerating || submitting}
+                    onClick={() => void autoFillMeta()}
+                    className="rounded border border-[#4fc3f7]/40 px-2 py-1 text-[11px] text-[#4fc3f7] hover:bg-[#4fc3f7]/10 disabled:opacity-40"
+                  >
+                    {metaGenerating ? "生成中…" : "重新生成"}
+                  </button>
+                </div>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  本次简介/标签来源：
+                  {metaGeneratedBy === "deepseek"
+                    ? "DeepSeek"
+                    : metaGeneratedBy === "fallback"
+                      ? "fallback"
+                      : "未生成"}
+                </p>
+                <div className={fieldClass + " min-h-[86px] whitespace-pre-wrap text-zinc-200"}>
+                  {synopsis || "暂无简介，点击“重新生成”自动填写。"}
+                </div>
+                <div className="mt-3">
+                  <span className="text-xs text-zinc-400">作品标签（DeepSeek 自动生成）</span>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {tags.length === 0 ? (
+                      <span className="text-[11px] text-zinc-500">暂无标签</span>
+                    ) : (
+                      tags.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-full border border-[#4fc3f7]/35 bg-[#0a0e17] px-2 py-0.5 text-[11px] text-[#4fc3f7]"
+                        >
+                          #{t}
+                        </span>
+                      ))
+                    )}
                   </div>
                 </div>
               </section>
@@ -298,6 +313,41 @@ export function PublishNovelModal({
                   </div>
                 ) : null}
 
+                <div className="mt-3">
+                  <span className="text-xs text-zinc-400">排版策略</span>
+                  <div className="mt-1 space-y-1.5">
+                    <label className="flex cursor-pointer items-start gap-2 text-xs">
+                      <input
+                        type="radio"
+                        name="layoutMode"
+                        checked={layoutMode === "preserve"}
+                        onChange={() => setLayoutMode("preserve")}
+                        className="mt-0.5 accent-[#4fc3f7]"
+                      />
+                      <span>
+                        保留作者排版（推荐）
+                        <span className="block text-[11px] text-zinc-500">
+                          保留图片、表格、Markdown 渲染结构。
+                        </span>
+                      </span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-2 text-xs">
+                      <input
+                        type="radio"
+                        name="layoutMode"
+                        checked={layoutMode === "ai_reflow"}
+                        onChange={() => setLayoutMode("ai_reflow")}
+                        className="mt-0.5 accent-[#4fc3f7]"
+                      />
+                      <span>
+                        AI 自动排版（文本重排）
+                        <span className="block text-[11px] text-amber-300/90">
+                          可能影响图片、表格等富文本布局。
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
                 <div className="mt-3">
                   <span className="text-xs text-zinc-400">更新承诺</span>
                   <div className="mt-1 flex flex-wrap items-center gap-2">

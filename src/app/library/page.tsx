@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 
@@ -12,29 +13,18 @@ type LibraryItem = {
   publishedAt: string;
 };
 
-type ArticleDetail = {
-  articleId: string;
-  title: string;
-  synopsis: string;
-  contentHtml: string;
-  updatedAt: string;
-};
-
 export default function LibraryPage() {
   const {
     address,
     isConnected,
-    requestConnect,
     isConnectPending,
     connectErrorMessage,
     walletGuideOpen,
     closeWalletGuide,
   } = useWeb3Auth();
+  const router = useRouter();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pendingArticleId, setPendingArticleId] = useState<string | null>(null);
-  const [activeArticle, setActiveArticle] = useState<ArticleDetail | null>(null);
-  const [reading, setReading] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -51,47 +41,14 @@ export default function LibraryPage() {
     })();
   }, []);
 
-  const readArticle = async (articleId: string, wallet: string) => {
-    setReading(true);
-    try {
-      const res = await fetch(
-        `/api/v1/library/articles?articleId=${encodeURIComponent(articleId)}`,
-        {
-          headers: { "x-wallet-address": wallet },
-          cache: "no-store",
-        },
-      );
-      const data = (await res.json()) as { article?: ArticleDetail; error?: string };
-      if (!res.ok || !data.article) {
-        throw new Error(data.error ?? "加载失败");
-      }
-      setActiveArticle(data.article);
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setReading(false);
-    }
-  };
-
   const handleOpenArticle = async (articleId: string) => {
     if (!isConnected || !address) {
-      setPendingArticleId(articleId);
-      await requestConnect();
+      // Library list is public entry now; free mode can be read without wallet.
+      router.push(`/library/${encodeURIComponent(articleId)}`);
       return;
     }
-    await readArticle(articleId, address);
+    router.push(`/library/${encodeURIComponent(articleId)}`);
   };
-
-  useEffect(() => {
-    if (!pendingArticleId || !isConnected || !address) return;
-    void readArticle(pendingArticleId, address);
-    setPendingArticleId(null);
-  }, [pendingArticleId, isConnected, address]);
-
-  const modalTitle = useMemo(
-    () => activeArticle?.title ?? "阅读正文",
-    [activeArticle?.title],
-  );
 
   return (
     <div className="min-h-screen bg-[#050810] px-6 py-10 text-zinc-200">
@@ -124,57 +81,20 @@ export default function LibraryPage() {
                 <button
                   type="button"
                   onClick={() => void handleOpenArticle(item.articleId)}
-                  disabled={reading || isConnectPending}
+                  disabled={isConnectPending}
                   className="w-full cursor-pointer text-left disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <p className="text-sm font-medium text-zinc-100 hover:text-cyan-300">
                     {item.title}
                   </p>
                   <p className="mt-1 text-xs text-zinc-400">文章ID：{item.articleId}</p>
-                  <p className="mt-1 text-xs text-cyan-400">
-                    点击阅读（需连接 MetaMask）
-                  </p>
+                  <p className="mt-1 text-xs text-cyan-400">点击阅读</p>
                 </button>
               </li>
             ))}
           </ul>
         )}
       </div>
-
-      {activeArticle ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setActiveArticle(null)}
-          role="presentation"
-        >
-          <div
-            className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-[#2b405f] bg-[#0b1320] p-5"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label={modalTitle}
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-cyan-300">{modalTitle}</h2>
-              <button
-                type="button"
-                onClick={() => setActiveArticle(null)}
-                className="rounded-lg border border-zinc-600 px-3 py-1 text-xs text-zinc-300 hover:border-cyan-400 hover:text-cyan-300"
-              >
-                关闭
-              </button>
-            </div>
-            {activeArticle.contentHtml ? (
-              <article
-                className="prose prose-invert max-w-none"
-                dangerouslySetInnerHTML={{ __html: activeArticle.contentHtml }}
-              />
-            ) : (
-              <p className="text-sm text-zinc-400">当前暂无可读正文内容。</p>
-            )}
-          </div>
-        </div>
-      ) : null}
 
       {walletGuideOpen ? (
         <div

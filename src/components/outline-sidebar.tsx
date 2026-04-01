@@ -40,14 +40,69 @@ export type OutlineSidebarProps = {
   onUpdateStructure: (nodes: PlotNode[]) => void;
   /** 点击节点在稿面中定位 */
   onNodeSeek: (range: { from: number; to: number }) => void;
+  /** 章节节点：切换到对应章节 */
+  onChapterSelect?: (chapterId: string) => void;
+  /** 当前激活章节（用于同步高亮） */
+  activeChapterId?: string | null;
   /** 发布模块：大纲区顶部展示「草稿/已公开/付费中」 */
   publishStatusLabel?: string | null;
   /** 发布模块：撤回至草稿（仅免费公开等可撤状态由父组件控制） */
   onWithdrawPublish?: () => void;
   withdrawPublishDisabled?: boolean;
+  /** 按章节发布：已发布章节 ID 列表 */
+  publishedChapterIds?: string[];
+  /** 按章节发布：切换章节发布状态 */
+  onToggleChapterPublish?: (chapterId: string, publish: boolean) => Promise<void> | void;
+  /** 按章节发布：是否允许操作（例如未公开时禁用） */
+  chapterPublishDisabled?: boolean;
+  /** 一键发布全部章节 */
+  onPublishAllChapters?: () => Promise<void> | void;
+  publishAllChaptersDisabled?: boolean;
+  /** 删除章节（删除当前选中章节） */
+  onDeleteChapter?: (chapterId: string) => void;
 };
 
 const EDIT_COMMIT_MS = 650;
+const CHAPTER_CN = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+const CHAPTER_CN_TO_NUM: Record<string, number> = {
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+  十: 10,
+};
+
+function chapterNoLabel(n: number) {
+  if (n >= 1 && n <= 10) return CHAPTER_CN[n];
+  return String(n);
+}
+
+function chapterTitleByNo(n: number) {
+  return `第${chapterNoLabel(n)}章`;
+}
+
+function parseChapterNoFromTitle(title: string): number | null {
+  const t = title.trim();
+  const m = t.match(/^第([一二三四五六七八九十]|\d+)章/);
+  if (!m) return null;
+  const token = m[1];
+  if (/^\d+$/.test(token)) {
+    return Number.parseInt(token, 10);
+  }
+  return CHAPTER_CN_TO_NUM[token] ?? null;
+}
+
+function makeNodeId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function normalizeTag(raw: string): string {
   return raw.replace(/^#+/, "").trim();
@@ -63,17 +118,25 @@ function SortableOutlineCard({
   depth,
   activeOutlineId,
   onActivate,
+  onSelect,
   onPatch,
   onAddTag,
   onRemoveTag,
+  publishedChapterIds,
+  onToggleChapterPublish,
+  chapterPublishDisabled,
 }: {
   node: PlotOutlineNode;
   depth: number;
   activeOutlineId: string | null;
   onActivate: (n: PlotOutlineNode) => void;
+  onSelect: (n: PlotOutlineNode) => void;
   onPatch: (id: string, patch: Partial<PlotNode>) => void;
   onAddTag: (id: string, tag: string) => void;
   onRemoveTag: (id: string, tag: string) => void;
+  publishedChapterIds: Set<string>;
+  onToggleChapterPublish?: (chapterId: string, publish: boolean) => Promise<void> | void;
+  chapterPublishDisabled?: boolean;
 }) {
   const {
     attributes,
@@ -100,10 +163,15 @@ function SortableOutlineCard({
   };
 
   const active = node.id === activeOutlineId;
+  const isChapter = node.kind === "chapter";
+  const isPublished = isChapter && publishedChapterIds.has(node.id);
+  const [toggling, setToggling] = useState(false);
 
   return (
     <div ref={setNodeRef} style={style} className={isDragging ? "opacity-60" : ""}>
       <div
+        data-outline-id={node.id}
+        onClick={() => onSelect(node)}
         className={[
           "mb-2 rounded-lg border bg-white p-2.5 shadow-sm dark:bg-neutral-900",
           active
@@ -126,15 +194,54 @@ function SortableOutlineCard({
               <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
                 {plotKindLabel(node.kind)}
               </span>
-              <button
-                type="button"
-                onClick={() => onActivate(node)}
-                className="inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-violet-600 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-950/50"
-                title="在稿面中滚动到对应位置"
-              >
-                <Crosshair className="h-3 w-3" aria-hidden />
-                定位
-              </button>
+              <div className="flex items-center gap-1">
+                {isChapter ? (
+                  <>
+                    <span
+                      className={
+                        isPublished
+                          ? "rounded border border-emerald-500/35 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+                          : "rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                      }
+                    >
+                      {isPublished ? "已发布" : "未发布"}
+                    </span>
+                    {onToggleChapterPublish ? (
+                      <button
+                        type="button"
+                        disabled={Boolean(chapterPublishDisabled) || toggling}
+                        onClick={async () => {
+                          setToggling(true);
+                          try {
+                            await onToggleChapterPublish(node.id, !isPublished);
+                          } finally {
+                            setToggling(false);
+                          }
+                        }}
+                        className="rounded border border-cyan-500/40 px-1.5 py-0.5 text-[10px] text-cyan-700 hover:bg-cyan-50 disabled:opacity-40 dark:text-cyan-300 dark:hover:bg-cyan-950/40"
+                        title={
+                          chapterPublishDisabled
+                            ? "请先将整本设置为公开后再按章节发布"
+                            : isPublished
+                              ? "撤回本章发布"
+                              : "发布本章"
+                        }
+                      >
+                        {toggling ? "处理中…" : isPublished ? "撤回" : "发布"}
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => onActivate(node)}
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-violet-600 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-950/50"
+                  title="在稿面中滚动到对应位置"
+                >
+                  <Crosshair className="h-3 w-3" aria-hidden />
+                  定位
+                </button>
+              </div>
             </div>
             <input
               type="text"
@@ -188,9 +295,13 @@ function SortableOutlineCard({
           depth={depth + 1}
           activeOutlineId={activeOutlineId}
           onActivate={onActivate}
+          onSelect={onSelect}
           onPatch={onPatch}
           onAddTag={onAddTag}
           onRemoveTag={onRemoveTag}
+          publishedChapterIds={publishedChapterIds}
+          onToggleChapterPublish={onToggleChapterPublish}
+          chapterPublishDisabled={chapterPublishDisabled}
         />
       ) : null}
     </div>
@@ -202,17 +313,25 @@ function OutlineBranch({
   depth,
   activeOutlineId,
   onActivate,
+  onSelect,
   onPatch,
   onAddTag,
   onRemoveTag,
+  publishedChapterIds,
+  onToggleChapterPublish,
+  chapterPublishDisabled,
 }: {
   nodes: PlotOutlineNode[];
   depth: number;
   activeOutlineId: string | null;
   onActivate: (n: PlotOutlineNode) => void;
+  onSelect: (n: PlotOutlineNode) => void;
   onPatch: (id: string, patch: Partial<PlotNode>) => void;
   onAddTag: (id: string, tag: string) => void;
   onRemoveTag: (id: string, tag: string) => void;
+  publishedChapterIds: Set<string>;
+  onToggleChapterPublish?: (chapterId: string, publish: boolean) => Promise<void> | void;
+  chapterPublishDisabled?: boolean;
 }) {
   const ids = useMemo(() => nodes.map((n) => n.id), [nodes]);
   return (
@@ -226,9 +345,13 @@ function OutlineBranch({
                 depth={depth}
                 activeOutlineId={activeOutlineId}
                 onActivate={onActivate}
+                onSelect={onSelect}
                 onPatch={onPatch}
                 onAddTag={onAddTag}
                 onRemoveTag={onRemoveTag}
+                publishedChapterIds={publishedChapterIds}
+                onToggleChapterPublish={onToggleChapterPublish}
+                chapterPublishDisabled={chapterPublishDisabled}
               />
             </li>
           ))}
@@ -243,15 +366,28 @@ export function OutlineSidebar({
   onNodesChange,
   onUpdateStructure,
   onNodeSeek,
+  onChapterSelect,
+  activeChapterId,
   publishStatusLabel,
   onWithdrawPublish,
   withdrawPublishDisabled,
+  publishedChapterIds,
+  onToggleChapterPublish,
+  chapterPublishDisabled,
+  onPublishAllChapters,
+  publishAllChaptersDisabled,
+  onDeleteChapter,
 }: OutlineSidebarProps) {
   const roots = useMemo(() => flatToOutlineTree(nodes), [nodes]);
   const rootIds = useMemo(() => roots.map((r) => r.id), [roots]);
+  const publishedChapterIdSet = useMemo(
+    () => new Set(publishedChapterIds ?? []),
+    [publishedChapterIds],
+  );
 
   const [activeOutlineId, setActiveOutlineId] = useState<string | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
 
   const flushPersistTimer = useCallback(() => {
     if (persistTimerRef.current) {
@@ -321,13 +457,36 @@ export function OutlineSidebar({
   const handleActivate = useCallback(
     (n: PlotOutlineNode) => {
       setActiveOutlineId(n.id);
+      if (n.kind === "chapter") {
+        onChapterSelect?.(n.id);
+        return;
+      }
       const r = n.range;
       if (r && typeof r.from === "number") {
         onNodeSeek({ from: r.from, to: r.to ?? r.from });
       }
     },
-    [onNodeSeek],
+    [onChapterSelect, onNodeSeek],
   );
+
+  const handleSelect = useCallback((n: PlotOutlineNode) => {
+    setActiveOutlineId(n.id);
+  }, []);
+
+  useEffect(() => {
+    if (!activeChapterId) return;
+    setActiveOutlineId(activeChapterId);
+  }, [activeChapterId]);
+
+  useEffect(() => {
+    if (!activeOutlineId) return;
+    const root = listContainerRef.current;
+    if (!root) return;
+    const target = root.querySelector<HTMLElement>(
+      `[data-outline-id="${activeOutlineId}"]`,
+    );
+    target?.scrollIntoView({ block: "nearest" });
+  }, [activeOutlineId, roots.length]);
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -346,6 +505,56 @@ export function OutlineSidebar({
     [nodes, onNodesChange, onUpdateStructure, flushPersistTimer],
   );
 
+  const ensureVolumeAndAddChapter = useCallback(
+    (chapterNo: number) => {
+      const targetTitle = chapterTitleByNo(chapterNo);
+      const hasSame = nodes.some(
+        (n) => n.kind === "chapter" && n.title.trim() === targetTitle,
+      );
+      if (hasSame) {
+        if (typeof window !== "undefined") {
+          window.alert(`${targetTitle} 已存在`);
+        }
+        return;
+      }
+
+      const next = [...nodes];
+      let parentVolumeId = next.find((n) => n.kind === "volume")?.id;
+      if (!parentVolumeId) {
+        const vId = makeNodeId("plot-volume");
+        next.push({
+          id: vId,
+          kind: "volume",
+          title: "",
+          summary: "",
+        });
+        parentVolumeId = vId;
+      }
+
+      next.push({
+        id: makeNodeId("plot-chapter"),
+        kind: "chapter",
+        title: targetTitle,
+        summary: "",
+        parentId: parentVolumeId,
+      });
+
+      onNodesChange(next);
+      flushPersistTimer();
+      onUpdateStructure(next);
+    },
+    [nodes, onNodesChange, onUpdateStructure, flushPersistTimer],
+  );
+
+  const addNextChapter = useCallback(() => {
+    const chapterNos = nodes
+      .filter((n) => n.kind === "chapter")
+      .map((n) => parseChapterNoFromTitle(n.title))
+      .filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n > 0);
+    const maxNo = chapterNos.length > 0 ? Math.max(...chapterNos) : 0;
+    ensureVolumeAndAddChapter(maxNo + 1);
+  }, [nodes, ensureVolumeAndAddChapter]);
+
   return (
     <aside className="flex w-[270px] shrink-0 flex-col border-r border-neutral-200 bg-neutral-50/90 dark:border-neutral-800 dark:bg-neutral-950/80">
       <div className="border-b border-neutral-200 px-3 py-2.5 dark:border-neutral-800">
@@ -353,15 +562,57 @@ export function OutlineSidebar({
           <p className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">
             剧情大纲
           </p>
-          {publishStatusLabel ? (
-            <span className="rounded-full border border-cyan-500/35 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-700 dark:text-cyan-300">
-              发布状态 · {publishStatusLabel}
-            </span>
-          ) : null}
+          <div className="flex items-center gap-1.5">
+            {publishStatusLabel ? (
+              <span className="rounded-full border border-cyan-500/35 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-700 dark:text-cyan-300">
+                发布状态 · {publishStatusLabel}
+              </span>
+            ) : null}
+            {onPublishAllChapters ? (
+              <button
+                type="button"
+                disabled={publishAllChaptersDisabled}
+                onClick={() => void onPublishAllChapters()}
+                className="rounded-full border border-emerald-500/45 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-300"
+                title={
+                  publishAllChaptersDisabled
+                    ? "请先公开作品并确保已有章节"
+                    : "将当前所有章节标记为已发布"
+                }
+              >
+                一键发布全部章节
+              </button>
+            ) : null}
+          </div>
         </div>
         <p className="mt-0.5 text-xs text-neutral-700 dark:text-neutral-200">
           卷 / 章 / 节 · 拖拽同级排序 · 点击标题区定位稿面
         </p>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={addNextChapter}
+            className="rounded border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-900"
+          >
+            + 新增章节
+          </button>
+          <button
+            type="button"
+            disabled={
+              !onDeleteChapter ||
+              !activeOutlineId ||
+              !nodes.some((n) => n.id === activeOutlineId && n.kind === "chapter")
+            }
+            onClick={() => {
+              if (!onDeleteChapter || !activeOutlineId) return;
+              onDeleteChapter(activeOutlineId);
+            }}
+            className="rounded border border-rose-300 px-2 py-0.5 text-[11px] text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-950/40"
+            title="删除当前选中章节"
+          >
+            删除章节
+          </button>
+        </div>
         {onWithdrawPublish ? (
           <button
             type="button"
@@ -378,7 +629,7 @@ export function OutlineSidebar({
           </button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div ref={listContainerRef} className="min-h-0 flex-1 overflow-y-auto p-2">
         {roots.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs text-neutral-500">
             暂无大纲节点
@@ -401,9 +652,13 @@ export function OutlineSidebar({
                       depth={0}
                       activeOutlineId={activeOutlineId}
                       onActivate={handleActivate}
+                      onSelect={handleSelect}
                       onPatch={patchNode}
                       onAddTag={addTag}
                       onRemoveTag={removeTag}
+                      publishedChapterIds={publishedChapterIdSet}
+                      onToggleChapterPublish={onToggleChapterPublish}
+                      chapterPublishDisabled={chapterPublishDisabled}
                     />
                   </li>
                 ))}

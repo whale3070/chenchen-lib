@@ -4,6 +4,7 @@ import { Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 
 import { WalletConnect } from "@/components/wallet-connect";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
@@ -56,6 +57,12 @@ export function AuthorDashboard() {
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingNovelId, setEditingNovelId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   /** 发布模块：工作台聚合列表 */
   const [publishRows, setPublishRows] = useState<
@@ -66,6 +73,13 @@ export function AuthorDashboard() {
     }[]
   >([]);
   const [loadingPublish, setLoadingPublish] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharePayload, setSharePayload] = useState<{
+    title: string;
+    synopsis: string;
+    articleId: string;
+  } | null>(null);
+  const [shareQrDataUrl, setShareQrDataUrl] = useState<string>("");
 
   const connectBootRef = useRef(false);
 
@@ -169,6 +183,60 @@ export function AuthorDashboard() {
     setModalOpen(false);
   };
 
+  const openEditModal = (novel: NovelListItem) => {
+    setEditingNovelId(novel.id);
+    setEditTitle(novel.title);
+    setEditDescription(novel.description ?? "");
+    setEditError(null);
+    setEditOpen(true);
+  };
+
+  const closeEditModal = () => {
+    if (editSubmitting) return;
+    setEditOpen(false);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!address || !editingNovelId) return;
+    const t = editTitle.trim();
+    if (!t) {
+      setEditError("请填写小说标题");
+      return;
+    }
+    setEditSubmitting(true);
+    setEditError(null);
+    try {
+      const res = await fetch("/api/v1/novels", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-wallet-address": address,
+        },
+        body: JSON.stringify({
+          authorId: address,
+          novelId: editingNovelId,
+          title: t,
+          description: editDescription.trim(),
+        }),
+      });
+      const data = (await res.json()) as {
+        novel?: NovelListItem;
+        error?: string;
+      };
+      if (!res.ok || !data.novel) {
+        throw new Error(data.error ?? "保存失败");
+      }
+      setNovels((prev) =>
+        prev.map((n) => (n.id === data.novel!.id ? data.novel! : n)),
+      );
+      setEditOpen(false);
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : "保存失败");
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
   const handleCreate = async () => {
     if (!address) return;
     const t = title.trim();
@@ -205,6 +273,109 @@ export function AuthorDashboard() {
       setSubmitting(false);
     }
   };
+
+  const openShareModal = (row: {
+    novelTitle: string;
+    record: NovelPublishRecord | null;
+  }) => {
+    const articleId = row.record?.articleId?.trim();
+    if (!articleId) {
+      window.alert("该作品尚未分配文章ID，无法生成分享卡。");
+      return;
+    }
+    setSharePayload({
+      title: row.novelTitle,
+      synopsis: row.record?.synopsis ?? "",
+      articleId,
+    });
+    setShareOpen(true);
+  };
+
+  const closeShareModal = () => {
+    setShareOpen(false);
+  };
+
+  const handleDownloadShareImage = useCallback(async () => {
+    if (!sharePayload || !shareQrDataUrl) return;
+    const targetUrl = `${window.location.origin}/library/${sharePayload.articleId}`;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1520;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      window.alert("生成分享图失败：无法初始化画布");
+      return;
+    }
+
+    // Background
+    ctx.fillStyle = "#0b1320";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Card
+    ctx.fillStyle = "#101a2c";
+    roundRectFill(ctx, 70, 60, 940, 1400, 28);
+
+    ctx.fillStyle = "#e5e7eb";
+    ctx.font = "bold 54px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(`《${sharePayload.title}》小说`, 540, 185);
+
+    ctx.fillStyle = "#9ca3af";
+    ctx.font = "36px sans-serif";
+    ctx.fillText(`${sharePayload.title}读者入口`, 540, 245);
+
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "30px sans-serif";
+    const intro = sharePayload.synopsis || "扫码即可阅读，适合移动端浏览。";
+    drawWrappedCenteredText(ctx, intro, 540, 330, 820, 48);
+
+    const qrImage = await loadImage(shareQrDataUrl);
+    const qrSize = 520;
+    const qrX = (canvas.width - qrSize) / 2;
+    const qrY = 490;
+    ctx.fillStyle = "#ffffff";
+    roundRectFill(ctx, qrX - 20, qrY - 20, qrSize + 40, qrSize + 40, 20);
+    ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
+
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "26px sans-serif";
+    drawWrappedCenteredText(ctx, targetUrl, 540, 1100, 860, 38);
+
+    ctx.fillStyle = "#22d3ee";
+    ctx.font = "bold 28px sans-serif";
+    ctx.fillText("扫码即可阅读，适合移动端浏览。", 540, 1370);
+
+    const a = document.createElement("a");
+    a.href = canvas.toDataURL("image/png");
+    a.download = `${sharePayload.title}-小说分享图.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }, [sharePayload, shareQrDataUrl]);
+
+  useEffect(() => {
+    if (!shareOpen || !sharePayload) {
+      setShareQrDataUrl("");
+      return;
+    }
+    let cancelled = false;
+    const targetUrl = `${window.location.origin}/library/${sharePayload.articleId}`;
+    void QRCode.toDataURL(targetUrl, {
+      width: 520,
+      margin: 1,
+      errorCorrectionLevel: "M",
+    })
+      .then((dataUrl) => {
+        if (!cancelled) setShareQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setShareQrDataUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shareOpen, sharePayload]);
 
   if (!isConnected || !address) {
     const busy =
@@ -325,26 +496,37 @@ export function AuthorDashboard() {
                 <ul className="space-y-2">
                   {novels.map((n) => (
                     <li key={n.id}>
-                      <Link
-                        href={`/editor/${encodeURIComponent(n.id)}`}
-                        className="block rounded-xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-950 dark:hover:border-neutral-500"
-                      >
+                      <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-950 dark:hover:border-neutral-500">
                         <div className="flex flex-wrap items-baseline justify-between gap-2">
-                          <span className="font-medium">{n.title}</span>
-                          <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                            {n.wordCount.toLocaleString("zh-CN")} 字
-                            <span className="mx-1.5 text-neutral-300 dark:text-neutral-600">
-                              ·
+                          <Link
+                            href={`/editor/${encodeURIComponent(n.id)}`}
+                            className="font-medium hover:underline"
+                          >
+                            {n.title}
+                          </Link>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                              {n.wordCount.toLocaleString("zh-CN")} 字
+                              <span className="mx-1.5 text-neutral-300 dark:text-neutral-600">
+                                ·
+                              </span>
+                              最后修改 {formatModified(n.lastModified)}
                             </span>
-                            最后修改 {formatModified(n.lastModified)}
-                          </span>
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(n)}
+                              className="rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                            >
+                              编辑
+                            </button>
+                          </div>
                         </div>
                         {n.description ? (
                           <p className="mt-1 line-clamp-2 text-xs text-neutral-500 dark:text-neutral-400">
                             {n.description}
                           </p>
                         ) : null}
-                      </Link>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -370,6 +552,9 @@ export function AuthorDashboard() {
                     const st = publishStatusLabelZh(
                       derivePublishDisplayStatus(row.record),
                     );
+                    const canShare =
+                      derivePublishDisplayStatus(row.record) === "public" &&
+                      Boolean(row.record?.articleId);
                     const ts = row.record?.publishedAt
                       ? formatModified(row.record.publishedAt)
                       : "—";
@@ -396,6 +581,14 @@ export function AuthorDashboard() {
                           >
                             进入编辑器
                           </Link>
+                          <button
+                            type="button"
+                            disabled={!canShare}
+                            onClick={() => openShareModal(row)}
+                            className="rounded-lg border border-emerald-400/50 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            社交媒体小说分享
+                          </button>
                         </div>
                       </li>
                     );
@@ -494,6 +687,191 @@ export function AuthorDashboard() {
           </div>
         </div>
       )}
+
+      {shareOpen && sharePayload ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="presentation"
+          onClick={(e) => e.target === e.currentTarget && closeShareModal()}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="小说社交分享"
+            className="w-full max-w-md rounded-2xl border border-neutral-700 bg-[#0b1320] p-5 shadow-2xl"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-emerald-300">
+                社交媒体小说分享
+              </h3>
+              <button
+                type="button"
+                onClick={closeShareModal}
+                className="rounded border border-neutral-600 px-2 py-0.5 text-xs text-neutral-300 hover:border-emerald-400 hover:text-emerald-300"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-[#284056] bg-[#101a2c] p-4 text-center">
+              <h4 className="text-base font-semibold text-zinc-100">
+                《{sharePayload.title}》小说
+              </h4>
+              <p className="mt-1 text-xs text-zinc-400">{sharePayload.title}读者入口</p>
+              <p className="mt-3 text-xs leading-relaxed text-zinc-300">
+                {sharePayload.synopsis || "扫码即可阅读，适合移动端浏览。"}
+              </p>
+              {shareQrDataUrl ? (
+                <img
+                  src={shareQrDataUrl}
+                  alt="小说分享二维码"
+                  className="mx-auto mt-4 h-[220px] w-[220px] rounded-lg border border-neutral-700 bg-white p-2"
+                />
+              ) : (
+                <div className="mx-auto mt-4 flex h-[220px] w-[220px] items-center justify-center rounded-lg border border-neutral-700 bg-white p-2 text-xs text-neutral-500">
+                  生成二维码中…
+                </div>
+              )}
+              <p className="mt-2 break-all text-[10px] text-zinc-500">
+                {`${window.location.origin}/library/${sharePayload.articleId}`}
+              </p>
+              <button
+                type="button"
+                disabled={!shareQrDataUrl}
+                onClick={() => void handleDownloadShareImage()}
+                className="mt-3 rounded-md border border-emerald-500/50 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                下载本图片
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {editOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="presentation"
+          onClick={(e) => e.target === e.currentTarget && closeEditModal()}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="编辑小说信息"
+            className="w-full max-w-lg rounded-2xl border border-neutral-200 bg-[var(--background)] p-6 shadow-xl dark:border-neutral-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold">编辑小说信息</h2>
+            <div className="mt-4 space-y-4">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                  小说标题
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  maxLength={500}
+                  className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-950"
+                  placeholder="例如：星海尽头"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                  小说简介 / 详情
+                </label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows={5}
+                  maxLength={20000}
+                  className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-950"
+                  placeholder="简短介绍故事世界、主线或开篇氛围…"
+                />
+              </div>
+              {editError ? (
+                <p className="text-sm text-red-600 dark:text-red-400">{editError}</p>
+              ) : null}
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeEditModal}
+                disabled={editSubmitting}
+                className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium dark:border-neutral-600"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveEdit()}
+                disabled={editSubmitting}
+                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+              >
+                {editSubmitting ? "保存中…" : "保存修改"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function roundRectFill(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawWrappedCenteredText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  centerX: number,
+  startY: number,
+  maxWidth: number,
+  lineHeight: number,
+) {
+  const chars = text.split("");
+  const lines: string[] = [];
+  let line = "";
+  for (const ch of chars) {
+    const test = line + ch;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = ch;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  lines.forEach((l, i) => {
+    ctx.fillText(l, centerX, startY + i * lineHeight);
+  });
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("failed to load image"));
+    img.src = src;
+  });
 }

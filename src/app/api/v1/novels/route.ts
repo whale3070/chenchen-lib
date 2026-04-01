@@ -210,3 +210,60 @@ export async function POST(req: NextRequest) {
   };
   return NextResponse.json({ novel: listItem });
 }
+
+export async function PATCH(req: NextRequest) {
+  const wh = parseWalletHeader(req);
+  if (!wh.ok) return wh.res;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return badRequest("Invalid JSON");
+  }
+  if (!body || typeof body !== "object") {
+    return badRequest("Expected object body");
+  }
+  const o = body as Record<string, unknown>;
+
+  const authorId = typeof o.authorId === "string" ? o.authorId : "";
+  if (!isAddress(authorId)) return badRequest("Invalid authorId");
+  if (safeAuthorId(authorId) !== wh.walletLower) {
+    return forbidden("authorId 必须与 x-wallet-address 一致");
+  }
+
+  const novelId = typeof o.novelId === "string" ? o.novelId.trim() : "";
+  if (!novelId) return badRequest("Missing novelId");
+
+  const title = typeof o.title === "string" ? o.title.trim() : "";
+  if (!title || title.length > 500) {
+    return badRequest("Invalid title");
+  }
+  const description =
+    typeof o.description === "string" ? o.description.trim().slice(0, 20000) : "";
+
+  const idx = await readAuthorIndex(wh.walletLower);
+  const i = idx.novels.findIndex((n) => n.id === novelId);
+  if (i < 0) {
+    return NextResponse.json({ error: "未找到该小说" }, { status: 404 });
+  }
+
+  const prev = idx.novels[i];
+  const now = new Date().toISOString();
+  const next: NovelMeta = {
+    ...prev,
+    title,
+    description,
+    updatedAt: now,
+  };
+  idx.novels[i] = next;
+  await writeAuthorIndex(idx);
+
+  const stats = await readDraftStats(idx.authorId, next.id);
+  const item: NovelListItem = {
+    ...next,
+    wordCount: stats.wordCount,
+    lastModified: stats.draftUpdatedAt ?? next.updatedAt,
+  };
+  return NextResponse.json({ novel: item, ok: true });
+}

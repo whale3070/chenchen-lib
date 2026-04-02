@@ -5,6 +5,7 @@ import path from "node:path";
 import { isAddress } from "viem";
 
 import { getDraftFilePath } from "@/lib/draft-path";
+import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -21,6 +22,27 @@ type PublishRecordLite = {
   paymentMode?: "free" | "paid";
   publishedAt?: string;
   publishedChapterIds?: string[];
+};
+
+type TranslationStore = {
+  languages?: Record<
+    string,
+    {
+      updatedAt?: string;
+      displayTitle?: string;
+      displaySynopsis?: string;
+      tags?: string[];
+      draftText?: string;
+      manualText?: string;
+      chapters?: Record<
+        string,
+        {
+          translatedText?: string;
+          updatedAt?: string;
+        }
+      >;
+    }
+  >;
 };
 
 type StructurePayload = {
@@ -107,6 +129,164 @@ function isMobileUserAgent(ua: string): boolean {
   return /Android|iPhone|iPad|iPod|Mobile|HarmonyOS|Windows Phone/i.test(ua);
 }
 
+function parseDotEnvLine(line: string): [string, string] | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+  const idx = trimmed.indexOf("=");
+  if (idx <= 0) return null;
+  const key = trimmed.slice(0, idx).trim();
+  let val = trimmed.slice(idx + 1).trim();
+  if (
+    (val.startsWith('"') && val.endsWith('"')) ||
+    (val.startsWith("'") && val.endsWith("'"))
+  ) {
+    val = val.slice(1, -1);
+  }
+  return [key, val];
+}
+
+async function readFallbackEnv(): Promise<Record<string, string>> {
+  const fp = path.join(process.cwd(), "..", "..", ".env.production");
+  try {
+    const raw = await fs.readFile(fp, "utf8");
+    const out: Record<string, string> = {};
+    for (const line of raw.split("\n")) {
+      const kv = parseDotEnvLine(line);
+      if (!kv) continue;
+      out[kv[0]] = kv[1];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function containsCjk(text: string): boolean {
+  return /[\u3400-\u9fff]/.test(text);
+}
+
+async function enforceEnglishNoCjk(text: string): Promise<string | null> {
+  const envFallback = await readFallbackEnv();
+  const apiKey =
+    process.env.DEEPSEEK_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    envFallback.DEEPSEEK_API_KEY ||
+    envFallback.OPENAI_API_KEY;
+  const baseUrl =
+    process.env.DEEPSEEK_BASE_URL || envFallback.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
+  const model = process.env.DEEPSEEK_MODEL || envFallback.DEEPSEEK_MODEL || "deepseek-chat";
+  if (!apiKey) return null;
+
+  const prompt = [
+    "Rewrite the following passage into fluent English only.",
+    "Hard rule: do NOT output any Chinese characters.",
+    "Keep original meaning and paragraph structure.",
+    "Output only the rewritten English text.",
+    "",
+    text.slice(0, 12000),
+  ].join("\n");
+
+  const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content: "You only output English text without any Chinese characters.",
+        },
+        { role: "user", content: prompt },
+      ],
+    }),
+  });
+  if (!resp.ok) return null;
+  const data = (await resp.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const out = data.choices?.[0]?.message?.content?.trim() ?? "";
+  if (!out) return null;
+  return out;
+}
+
+function translationStorePath(authorId: string, novelId: string) {
+  const safeDoc = novelId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+  return path.join(
+    process.cwd(),
+    ".data",
+    "translations",
+    `${authorId.toLowerCase()}_${safeDoc}.json`,
+  );
+}
+
+async function readTranslationStore(
+  authorId: string,
+  novelId: string,
+): Promise<TranslationStore | null> {
+  try {
+    const raw = await fs.readFile(translationStorePath(authorId, novelId), "utf8");
+    const parsed = JSON.parse(raw) as TranslationStore;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function languageLabel(lang: string): string {
+  const map: Record<string, string> = {
+    zh: "中文原文",
+    en: "英文区",
+    ja: "日语区",
+    ko: "韩语区",
+    fr: "法语区",
+    de: "德语区",
+    es: "西语区",
+    ru: "俄语区",
+    pt: "葡语区",
+    it: "意语区",
+    vi: "越语区",
+    th: "泰语区",
+  };
+  return map[lang] ?? `${lang.toUpperCase()} 区`;
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function plainTextToHtml(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized) return "<p></p>";
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (paragraphs.length === 0) return "<p></p>";
+  return paragraphs
+    .map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
 async function backfillArticleIds(
   records: Array<{ filePath: string; data: PublishRecordLite }>,
 ) {
@@ -141,17 +321,56 @@ export async function GET(req: NextRequest) {
         r.data.authorId &&
         r.data.novelId,
     );
-    const items = await Promise.all(
+    const groupedItems = await Promise.all(
       publicRecords.map(async (r) => {
         const novelTitle = await readNovelTitle(r.data.authorId!, r.data.novelId!);
-        return {
+        const base = {
           articleId: r.data.articleId!,
           title: novelTitle || r.data.title?.trim() || "未命名作品",
           synopsis: r.data.synopsis?.trim() || "",
           publishedAt: r.data.publishedAt || "",
+          language: "zh",
+          languageLabel: languageLabel("zh"),
         };
+        const out = [base];
+        const store = await readTranslationStore(r.data.authorId!, r.data.novelId!);
+        const langs = Object.entries(store?.languages ?? {});
+        for (const [lang, payload] of langs) {
+          if (!lang || lang === "zh") continue;
+          const hasChapterTranslations =
+            payload?.chapters &&
+            Object.values(payload.chapters).some(
+              (x) => typeof x?.translatedText === "string" && x.translatedText.trim().length > 0,
+            );
+          const hasDraftTranslation =
+            typeof payload?.draftText === "string" && payload.draftText.trim().length > 0;
+          const hasManualTranslation =
+            typeof payload?.manualText === "string" && payload.manualText.trim().length > 0;
+          if (!hasChapterTranslations && !hasDraftTranslation && !hasManualTranslation) continue;
+          const localizedTitle =
+            typeof payload?.displayTitle === "string" && payload.displayTitle.trim()
+              ? payload.displayTitle.trim()
+              : base.title;
+          const localizedSynopsis =
+            typeof payload?.displaySynopsis === "string" && payload.displaySynopsis.trim()
+              ? payload.displaySynopsis.trim()
+              : typeof payload?.draftText === "string" && payload.draftText.trim()
+                ? payload.draftText.trim().slice(0, 220)
+                : typeof payload?.manualText === "string" && payload.manualText.trim()
+                  ? payload.manualText.trim().slice(0, 220)
+                  : base.synopsis;
+          out.push({
+            ...base,
+            title: localizedTitle,
+            synopsis: localizedSynopsis,
+            language: lang,
+            languageLabel: languageLabel(lang),
+          });
+        }
+        return out;
       }),
     );
+    const items = groupedItems.flat();
     items.sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1));
     return NextResponse.json({ items });
   }
@@ -163,10 +382,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "文章不存在或未公开" }, { status: 404 });
   }
 
+  const targetLangRaw = req.nextUrl.searchParams.get("lang")?.trim().toLowerCase() ?? "zh";
+  const targetLang = /^[a-z]{2,5}$/.test(targetLangRaw) ? targetLangRaw : "zh";
+
   const novelTitle =
     (await readNovelTitle(rec.data.authorId, rec.data.novelId)) ??
     rec.data.title?.trim() ??
     "未命名作品";
+  let responseTitle = novelTitle;
 
   const draftPath = getDraftFilePath(
     process.cwd(),
@@ -267,7 +490,14 @@ export async function GET(req: NextRequest) {
     : [];
   if (publishedIds.length > 0) {
     const allow = new Set(publishedIds);
-    chapters = chapters.filter((c) => allow.has(c.id));
+    const filtered = chapters.filter((c) => allow.has(c.id));
+    // 章节重切/导入后，章节 ID 可能整体重建，导致 publishedChapterIds 与当前结构失配。
+    // 若完全失配，或发布记录有多章但只匹配到 1 章，也回退为当前结构章节，避免读者端只显示一章。
+    const severeMismatch =
+      filtered.length === 0 || (publishedIds.length > 1 && filtered.length <= 1);
+    if (!severeMismatch) {
+      chapters = filtered;
+    }
   }
 
   const paymentMode = rec.data.paymentMode === "paid" ? "paid" : "free";
@@ -290,12 +520,82 @@ export async function GET(req: NextRequest) {
     ? chapters
     : chapters.slice(0, Math.min(freePreviewChapters, chapters.length));
 
+  let responseSynopsis = rec.data.synopsis?.trim() || "";
+  let responseChapters = readableChapters;
+  if (targetLang !== "zh") {
+    const store = await readTranslationStore(rec.data.authorId, rec.data.novelId);
+    const langPayload = store?.languages?.[targetLang];
+    if (langPayload) {
+      const chapterMap = langPayload.chapters ?? {};
+      const nextChapters: Array<{ id: string; title: string; contentHtml: string }> = [];
+      let firstTranslatedPreview = "";
+
+      for (let idx = 0; idx < readableChapters.length; idx += 1) {
+        const chapter = readableChapters[idx];
+        let translated = chapterMap[chapter.id]?.translatedText?.trim() ?? "";
+
+        if (!translated && idx === 0 && typeof langPayload.draftText === "string") {
+          translated = langPayload.draftText.trim();
+        }
+
+        if (
+          !translated &&
+          idx === 0 &&
+          (!langPayload.draftText || !langPayload.draftText.trim()) &&
+          typeof langPayload.manualText === "string"
+        ) {
+          translated = langPayload.manualText.trim();
+        }
+
+        if (translated) {
+          if (!firstTranslatedPreview) firstTranslatedPreview = translated;
+          nextChapters.push({
+            ...chapter,
+            contentHtml: plainTextToHtml(translated),
+          });
+        } else {
+          nextChapters.push(chapter);
+        }
+      }
+
+      responseChapters = nextChapters;
+
+      if (typeof langPayload.draftText === "string" && langPayload.draftText.trim()) {
+        responseSynopsis = langPayload.draftText.trim().slice(0, 280);
+      } else if (
+        typeof langPayload.manualText === "string" &&
+        langPayload.manualText.trim()
+      ) {
+        responseSynopsis = langPayload.manualText.trim().slice(0, 280);
+      } else if (firstTranslatedPreview) {
+        responseSynopsis = firstTranslatedPreview.slice(0, 280);
+      }
+      if (
+        typeof langPayload.displayTitle === "string" &&
+        langPayload.displayTitle.trim().length > 0
+      ) {
+        responseTitle = langPayload.displayTitle.trim().slice(0, 120);
+      }
+      if (
+        typeof langPayload.displaySynopsis === "string" &&
+        langPayload.displaySynopsis.trim().length > 0
+      ) {
+        responseSynopsis = langPayload.displaySynopsis.trim().slice(0, 280);
+      }
+      if (Array.isArray(langPayload.tags) && langPayload.tags.length > 0) {
+        rec.data.tags = langPayload.tags;
+      } else if (targetLang === "en") {
+        rec.data.tags = (rec.data.tags ?? []).filter((t) => !containsCjk(t));
+      }
+    }
+  }
+
   return NextResponse.json({
     article: {
       articleId,
       authorId: rec.data.authorId,
-      title: novelTitle,
-      synopsis: rec.data.synopsis?.trim() || "",
+      title: responseTitle,
+      synopsis: responseSynopsis,
       tags: Array.isArray(rec.data.tags)
         ? rec.data.tags
             .filter((x): x is string => typeof x === "string")
@@ -308,7 +608,9 @@ export async function GET(req: NextRequest) {
       freePreviewChapters,
       unlocked,
       totalChapters: chapters.length,
-      chapters: readableChapters.map(({ title, contentHtml }) => ({ title, contentHtml })),
+      language: targetLang,
+      languageLabel: languageLabel(targetLang),
+      chapters: responseChapters.map(({ title, contentHtml }) => ({ title, contentHtml })),
       paymentQrImageDataUrl,
     },
   });
@@ -358,5 +660,14 @@ export async function POST(req: NextRequest) {
     ),
     "utf8",
   );
+  try {
+    await trackWalletEvent({
+      wallet: wallet.toLowerCase(),
+      eventType: "reader_unlock",
+      meta: { articleId },
+    });
+  } catch {
+    // ignore analytics error
+  }
   return NextResponse.json({ ok: true, unlocked: true });
 }

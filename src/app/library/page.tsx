@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 
@@ -11,7 +11,11 @@ type LibraryItem = {
   title: string;
   synopsis: string;
   publishedAt: string;
+  language: string;
+  languageLabel: string;
 };
+
+const READER_LANG_PREF_KEY = "chenchen:reader:library:langs";
 
 export default function LibraryPage() {
   const {
@@ -25,6 +29,8 @@ export default function LibraryPage() {
   const router = useRouter();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"library" | "settings">("library");
+  const [selectedLangs, setSelectedLangs] = useState<string[]>(["en"]);
 
   useEffect(() => {
     void (async () => {
@@ -41,13 +47,75 @@ export default function LibraryPage() {
     })();
   }, []);
 
-  const handleOpenArticle = async (articleId: string) => {
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(READER_LANG_PREF_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const langs = parsed
+        .filter((x): x is string => typeof x === "string")
+        .map((x) => x.trim().toLowerCase())
+        .filter(Boolean);
+      if (langs.length > 0) setSelectedLangs(Array.from(new Set(langs)));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(READER_LANG_PREF_KEY, JSON.stringify(selectedLangs));
+    } catch {
+      // ignore
+    }
+  }, [selectedLangs]);
+
+  const handleOpenArticle = async (articleId: string, language: string) => {
+    const target =
+      language && language !== "zh"
+        ? `/library/${encodeURIComponent(articleId)}?lang=${encodeURIComponent(language)}`
+        : `/library/${encodeURIComponent(articleId)}`;
     if (!isConnected || !address) {
       // Library list is public entry now; free mode can be read without wallet.
-      router.push(`/library/${encodeURIComponent(articleId)}`);
+      router.push(target);
       return;
     }
-    router.push(`/library/${encodeURIComponent(articleId)}`);
+    router.push(target);
+  };
+
+  const availableLangs = useMemo(() => {
+    const set = new Set(items.map((x) => x.language).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const filteredItems = useMemo(
+    () =>
+      items.filter((item) =>
+        selectedLangs.length > 0 ? selectedLangs.includes(item.language) : false,
+      ),
+    [items, selectedLangs],
+  );
+
+  const groupedItems = useMemo(
+    () =>
+      filteredItems.reduce<Record<string, LibraryItem[]>>((acc, item) => {
+        const key = item.languageLabel || item.language.toUpperCase();
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(item);
+        return acc;
+      }, {}),
+    [filteredItems],
+  );
+
+  const toggleLang = (lang: string) => {
+    setSelectedLangs((prev) => {
+      if (prev.includes(lang)) {
+        const next = prev.filter((x) => x !== lang);
+        return next.length > 0 ? next : prev;
+      }
+      return [...prev, lang];
+    });
   };
 
   return (
@@ -62,37 +130,110 @@ export default function LibraryPage() {
             返回首页
           </Link>
         </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setTab("library")}
+            className={
+              tab === "library"
+                ? "rounded-md border border-cyan-400/60 bg-cyan-500/15 px-3 py-1 text-xs text-cyan-200"
+                : "rounded-md border border-[#2d405e] bg-[#0d1625] px-3 py-1 text-xs text-zinc-300"
+            }
+          >
+            阅读书库
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("settings")}
+            className={
+              tab === "settings"
+                ? "rounded-md border border-cyan-400/60 bg-cyan-500/15 px-3 py-1 text-xs text-cyan-200"
+                : "rounded-md border border-[#2d405e] bg-[#0d1625] px-3 py-1 text-xs text-zinc-300"
+            }
+          >
+            读者语言设置
+          </button>
+        </div>
 
         {loading ? (
           <p className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
             加载中…
           </p>
+        ) : tab === "settings" ? (
+          <section className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4">
+            <h2 className="text-sm font-semibold text-cyan-300">选择可见语言（多选）</h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              勾选哪些语言，就只展示这些语言分区内容。
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {availableLangs.map((lang) => (
+                <label
+                  key={lang}
+                  className={`cursor-pointer rounded-md border px-2.5 py-1 text-xs ${
+                    selectedLangs.includes(lang)
+                      ? "border-cyan-400/60 bg-cyan-500/15 text-cyan-200"
+                      : "border-[#2d405e] bg-[#0d1625] text-zinc-300"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={selectedLangs.includes(lang)}
+                    onChange={() => toggleLang(lang)}
+                  />
+                  {lang.toUpperCase()}
+                </label>
+              ))}
+            </div>
+          </section>
         ) : items.length === 0 ? (
           <p className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
             暂无已发布文章 ID。
           </p>
+        ) : filteredItems.length === 0 ? (
+          <p className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
+            当前语言设置下暂无可阅读内容。
+          </p>
         ) : (
-          <ul className="space-y-2">
-            {items.map((item) => (
-              <li
-                key={item.articleId}
-                className="rounded-xl border border-[#1b2b43] bg-[#09101b] px-4 py-3"
+          <div className="space-y-4">
+            {Object.entries(groupedItems).map(([zoneLabel, zoneItems]) => (
+              <section
+                key={zoneLabel}
+                className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-3"
               >
-                <button
-                  type="button"
-                  onClick={() => void handleOpenArticle(item.articleId)}
-                  disabled={isConnectPending}
-                  className="w-full cursor-pointer text-left disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <p className="text-sm font-medium text-zinc-100 hover:text-cyan-300">
-                    {item.title}
-                  </p>
-                  <p className="mt-1 text-xs text-zinc-400">文章ID：{item.articleId}</p>
-                  <p className="mt-1 text-xs text-cyan-400">点击阅读</p>
-                </button>
-              </li>
+                <h2 className="mb-2 text-sm font-semibold text-cyan-300">{zoneLabel}</h2>
+                <ul className="space-y-2">
+                  {zoneItems.map((item) => (
+                    <li
+                      key={`${item.articleId}-${item.language}`}
+                      className="rounded-xl border border-[#1b2b43] bg-[#0d1524] px-4 py-3"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void handleOpenArticle(item.articleId, item.language)}
+                        disabled={isConnectPending}
+                        className="w-full cursor-pointer text-left disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <p className="text-sm font-medium text-zinc-100 hover:text-cyan-300">
+                          {item.title}
+                        </p>
+                        {item.synopsis ? (
+                          <p className="mt-1 line-clamp-2 text-xs text-zinc-400">
+                            {item.synopsis}
+                          </p>
+                        ) : null}
+                        <p className="mt-1 text-xs text-zinc-400">文章ID：{item.articleId}</p>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          语言：{item.language.toUpperCase()}
+                        </p>
+                        <p className="mt-1 text-xs text-cyan-400">点击阅读</p>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </div>
 

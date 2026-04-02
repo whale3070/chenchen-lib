@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { getDraftFilePath } from "@/lib/draft-path";
+import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -100,6 +101,15 @@ export async function POST(req: NextRequest) {
 
   const fp = await draftPath(payload.authorId, docId);
   await fs.writeFile(fp, JSON.stringify(payload), "utf8");
+  try {
+    await trackWalletEvent({
+      wallet: payload.authorId,
+      eventType: "save_draft",
+      meta: { novelId: docId },
+    });
+  } catch {
+    // analytics should not block core flow
+  }
 
   return NextResponse.json({ ok: true, updatedAt: payload.updatedAt });
 }

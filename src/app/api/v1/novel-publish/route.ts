@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { autoFormatChaptersForPublish } from "@/lib/server/deepseek-publish-format";
+import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 import type { NovelPublishRecord } from "@/lib/novel-publish";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -39,6 +40,15 @@ function publishFilePath(authorLower: string, novelId: string) {
     process.cwd(),
     ".data",
     "publish",
+    `${authorLower}_${safeNovelSegment(novelId)}.json`,
+  );
+}
+
+function structureFilePath(authorLower: string, novelId: string) {
+  return path.join(
+    process.cwd(),
+    ".data",
+    "structure",
     `${authorLower}_${safeNovelSegment(novelId)}.json`,
   );
 }
@@ -139,6 +149,31 @@ async function writePublishRecord(rec: NovelPublishRecord) {
   const fp = publishFilePath(rec.authorId, rec.novelId);
   await fs.mkdir(path.dirname(fp), { recursive: true });
   await fs.writeFile(fp, JSON.stringify(rec, null, 2), "utf8");
+}
+
+async function readStructureChapterIds(
+  authorLower: string,
+  novelId: string,
+): Promise<string[]> {
+  const fp = structureFilePath(authorLower, novelId);
+  try {
+    const raw = await fs.readFile(fp, "utf8");
+    const parsed = JSON.parse(raw) as {
+      nodes?: Array<{ id?: unknown; kind?: unknown }>;
+    };
+    return (parsed.nodes ?? [])
+      .filter((n) => n?.kind === "chapter" && typeof n?.id === "string")
+      .map((n) => String(n.id).trim())
+      .filter(Boolean)
+      .slice(0, 2000);
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return [];
+    throw e;
+  }
 }
 
 /** 列表或单本 */
@@ -269,12 +304,21 @@ export async function POST(req: NextRequest) {
       publishedAt: existing.publishedAt || new Date().toISOString(),
     };
     await writePublishRecord(next);
+    try {
+      await trackWalletEvent({
+        wallet: wh.walletLower,
+        eventType: "publish_change",
+        meta: { novelId },
+      });
+    } catch {
+      // ignore analytics error
+    }
     return NextResponse.json({ record: next, ok: true });
   }
 
   if (o.action === "publish_all_chapters") {
-    const allChapterIds = parseChapterIds(o.allChapterIds);
-    if (allChapterIds.length === 0) {
+    const clientChapterIds = parseChapterIds(o.allChapterIds);
+    if (clientChapterIds.length === 0) {
       return badRequest("Missing allChapterIds");
     }
     const existing = await readPublishRecord(wh.walletLower, novelId);
@@ -285,6 +329,12 @@ export async function POST(req: NextRequest) {
     if (existing.visibility !== "public") {
       return badRequest("当前作品未公开，无法发布章节");
     }
+    const structureChapterIds = await readStructureChapterIds(wh.walletLower, novelId);
+    // 若客户端传入的章节列表明显偏少，优先以服务端结构文件为准，避免“只发布了 1 章”。
+    const allChapterIds =
+      structureChapterIds.length > clientChapterIds.length
+        ? structureChapterIds
+        : clientChapterIds;
     if (layoutMode === "ai_reflow") {
       await autoFormatChaptersForPublish({
         authorLower: wh.walletLower,
@@ -299,6 +349,15 @@ export async function POST(req: NextRequest) {
       publishedAt: existing.publishedAt || new Date().toISOString(),
     };
     await writePublishRecord(next);
+    try {
+      await trackWalletEvent({
+        wallet: wh.walletLower,
+        eventType: "publish_change",
+        meta: { novelId },
+      });
+    } catch {
+      // ignore analytics error
+    }
     return NextResponse.json({ record: next, ok: true });
   }
 
@@ -323,6 +382,15 @@ export async function POST(req: NextRequest) {
       articleId: existing.articleId,
     };
     await writePublishRecord(next);
+    try {
+      await trackWalletEvent({
+        wallet: wh.walletLower,
+        eventType: "publish_change",
+        meta: { novelId },
+      });
+    } catch {
+      // ignore analytics error
+    }
     return NextResponse.json({ record: next, ok: true });
   }
 
@@ -409,5 +477,14 @@ export async function POST(req: NextRequest) {
   }
 
   await writePublishRecord(record);
+  try {
+    await trackWalletEvent({
+      wallet: wh.walletLower,
+      eventType: "publish_change",
+      meta: { novelId },
+    });
+  } catch {
+    // ignore analytics error
+  }
   return NextResponse.json({ record, ok: true });
 }

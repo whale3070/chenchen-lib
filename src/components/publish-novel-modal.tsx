@@ -340,9 +340,9 @@ export function PublishNovelModal({
                         className="mt-0.5 accent-[#4fc3f7]"
                       />
                       <span>
-                        AI 自动排版（文本重排）
-                        <span className="block text-[11px] text-amber-300/90">
-                          可能影响图片、表格等富文本布局。
+                        AI 自动排版（保留图片）
+                        <span className="block text-[11px] text-zinc-500">
+                          自动优化段落和断句，同时保留图片占位符并回填。
                         </span>
                       </span>
                     </label>

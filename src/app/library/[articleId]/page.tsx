@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import QRCode from "qrcode";
@@ -20,6 +21,8 @@ type ReaderArticle = {
   totalChapters: number;
   chapters: Array<{ title: string; contentHtml: string }>;
   paymentQrImageDataUrl?: string | null;
+  language?: string;
+  languageLabel?: string;
 };
 
 const ARTICLE_LOAD_TIMEOUT_MS = 12000;
@@ -45,6 +48,11 @@ export default function ReaderArticlePage({
   params: Promise<{ articleId: string }>;
 }) {
   const { articleId } = use(params);
+  const searchParams = useSearchParams();
+  const langParam = useMemo(() => {
+    const raw = (searchParams.get("lang") ?? "").trim().toLowerCase();
+    return /^[a-z]{2,5}$/.test(raw) ? raw : "zh";
+  }, [searchParams]);
   const {
     address,
     isConnected,
@@ -68,6 +76,61 @@ export default function ReaderArticlePage({
     () => new Set([0]),
   );
   const chapterTopRef = useRef<HTMLElement | null>(null);
+  const uiLang = article?.language === "zh" || !article?.language ? "zh" : "en";
+  const t =
+    uiLang === "zh"
+      ? {
+          back: "← 返回书库",
+          connect: "连接 MetaMask 后阅读",
+          loading: "加载中…",
+          notFound: "未找到可阅读内容。",
+          author: "作者",
+          update: "小说更新",
+          readMode: "阅读模式",
+          free: "免费公开",
+          paid: (n: number) => `付费阅读（前 ${n} 章免费）`,
+          langZone: "当前语言分区",
+          toc: "章节目录",
+          readable: (a: number, b: number) => `可读 ${a} / 共 ${b} 章`,
+          noChapter: "暂无可阅读章节",
+          current: "当前",
+          prev: "上一章",
+          next: "下一章",
+          tip: "打赏作者",
+          share: "社交媒体分享",
+          shareTitle: "社交媒体作品分享",
+          shareEntry: "读者分享入口（含钱包标记）",
+          wallet: "钱包",
+          close: "关闭",
+          download: "下载本图片",
+          generating: "生成二维码中…",
+        }
+      : {
+          back: "← Back to Library",
+          connect: "Connect MetaMask to Read",
+          loading: "Loading...",
+          notFound: "No readable content found.",
+          author: "Author",
+          update: "Updated",
+          readMode: "Reading Mode",
+          free: "Free Public",
+          paid: (n: number) => `Paid Reading (first ${n} chapters free)`,
+          langZone: "Language",
+          toc: "Table of Contents",
+          readable: (a: number, b: number) => `Readable ${a} / Total ${b} chapters`,
+          noChapter: "No readable chapters.",
+          current: "Current",
+          prev: "Previous",
+          next: "Next",
+          tip: "Tip Author",
+          share: "Social Share",
+          shareTitle: "Social Media Share",
+          shareEntry: "Reader share entry (wallet marked)",
+          wallet: "Wallet",
+          close: "Close",
+          download: "Download Image",
+          generating: "Generating QR...",
+        };
 
   const loadArticle = async (wallet?: string) => {
     setLoading(true);
@@ -79,14 +142,14 @@ export default function ReaderArticlePage({
         const ac = new AbortController();
         const timeout = window.setTimeout(() => ac.abort(), ARTICLE_LOAD_TIMEOUT_MS);
         try {
-          const res = await fetch(
-            `/api/v1/library/articles?articleId=${encodeURIComponent(articleId)}`,
-            {
-              headers: wallet ? { "x-wallet-address": wallet } : undefined,
-              cache: "no-store",
-              signal: ac.signal,
-            },
-          );
+          const apiUrl =
+            `/api/v1/library/articles?articleId=${encodeURIComponent(articleId)}` +
+            `&lang=${encodeURIComponent(langParam)}`;
+          const res = await fetch(apiUrl, {
+            headers: wallet ? { "x-wallet-address": wallet } : undefined,
+            cache: "no-store",
+            signal: ac.signal,
+          });
           const data = (await res.json()) as { article?: ReaderArticle; error?: string };
           if (!res.ok || !data.article) {
             throw new Error(data.error ?? "加载失败");
@@ -134,7 +197,7 @@ export default function ReaderArticlePage({
       await loadArticle(isConnected && address ? address : undefined);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected, address, articleId]);
+  }, [isConnected, address, articleId, langParam]);
 
   const currentChapter = useMemo(
     () => article?.chapters?.[chapterIndex] ?? null,
@@ -142,10 +205,13 @@ export default function ReaderArticlePage({
   );
   const shareTargetUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
-    const base = `${window.location.origin}/library/${articleId}`;
+    const articleLang = article?.language && article.language !== "zh" ? article.language : "";
+    const base = articleLang
+      ? `${window.location.origin}/library/${articleId}?lang=${encodeURIComponent(articleLang)}`
+      : `${window.location.origin}/library/${articleId}`;
     if (!address) return base;
-    return `${base}?readerWallet=${encodeURIComponent(address)}`;
-  }, [address, articleId]);
+    return `${base}${base.includes("?") ? "&" : "?"}readerWallet=${encodeURIComponent(address)}`;
+  }, [address, articleId, article?.language]);
 
   const currentChapterRenderedHtml = useMemo(() => {
     const raw = currentChapter?.contentHtml ?? "";
@@ -231,25 +297,54 @@ export default function ReaderArticlePage({
     ctx.font = "34px sans-serif";
     ctx.fillText("读者社交分享入口", 540, 245);
 
-    ctx.fillStyle = "#cbd5e1";
-    ctx.font = "28px sans-serif";
-    const intro = article.synopsis || "扫码即可阅读，适合移动端浏览。";
-    drawWrappedCenteredText(ctx, intro, 540, 330, 820, 44);
-
-    if (article.tags?.length) {
-      ctx.fillStyle = "#7dd3fc";
-      ctx.font = "24px sans-serif";
-      const tagsText = article.tags.slice(0, 8).map((t) => `#${t}`).join("  ");
-      drawWrappedCenteredText(ctx, tagsText, 540, 445, 860, 34);
-    }
-
     const qrImage = await loadImage(shareQrDataUrl);
     const qrSize = 500;
     const qrX = (canvas.width - qrSize) / 2;
-    const qrY = 490;
+    const qrY = 560;
     ctx.fillStyle = "#ffffff";
     roundRectFill(ctx, qrX - 20, qrY - 20, qrSize + 40, qrSize + 40, 20);
     ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
+
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "28px sans-serif";
+    const intro = article.synopsis || "扫码即可阅读，适合移动端浏览。";
+    const introStartY = 330;
+    const introLineHeight = 42;
+    let cursorY = introStartY;
+    const introMaxLines = Math.max(
+      2,
+      Math.floor((qrY - 120 - introStartY) / introLineHeight),
+    );
+    const introLines = drawWrappedCenteredTextClamped(
+      ctx,
+      intro,
+      540,
+      introStartY,
+      820,
+      introLineHeight,
+      introMaxLines,
+    );
+    cursorY += introLines * introLineHeight + 12;
+
+    if (article.tags?.length && cursorY < qrY - 44) {
+      ctx.fillStyle = "#7dd3fc";
+      ctx.font = "24px sans-serif";
+      const tagsText = article.tags.slice(0, 8).map((t) => `#${t}`).join("  ");
+      const tagsLineHeight = 32;
+      const tagsMaxLines = Math.max(
+        1,
+        Math.floor((qrY - 44 - cursorY) / tagsLineHeight),
+      );
+      drawWrappedCenteredTextClamped(
+        ctx,
+        tagsText,
+        540,
+        cursorY,
+        860,
+        tagsLineHeight,
+        tagsMaxLines,
+      );
+    }
 
     ctx.fillStyle = "#94a3b8";
     ctx.font = "24px sans-serif";
@@ -352,7 +447,7 @@ export default function ReaderArticlePage({
             href="/library"
             className="text-sm text-cyan-400 underline-offset-4 hover:text-cyan-300 hover:underline"
           >
-            ← 返回书库
+            {t.back}
           </Link>
           {!isConnected && article?.paymentMode === "paid" ? (
             <button
@@ -361,7 +456,7 @@ export default function ReaderArticlePage({
               onClick={() => void requestConnect()}
               className="rounded-lg border border-cyan-500/40 px-3 py-1.5 text-xs text-cyan-300 hover:bg-cyan-950/40 disabled:opacity-50"
             >
-              {isConnectPending ? "连接中…" : "连接 MetaMask 后阅读"}
+              {isConnectPending ? (uiLang === "zh" ? "连接中…" : "Connecting...") : t.connect}
             </button>
           ) : null}
         </div>
@@ -369,6 +464,7 @@ export default function ReaderArticlePage({
         {loading ? (
           <div className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
             <p>加载中…</p>
+            <p>{t.loading}</p>
             {loadingSlow ? (
               <div className="mt-2 flex items-center gap-3">
                 <span className="text-xs text-zinc-500">
@@ -386,7 +482,7 @@ export default function ReaderArticlePage({
           </div>
         ) : !article ? (
           <p className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
-            未找到可阅读内容。
+            {t.notFound}
           </p>
         ) : (
           <>
@@ -395,15 +491,18 @@ export default function ReaderArticlePage({
               className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4"
             >
               <h1 className="text-xl font-semibold text-zinc-100">{article.title}</h1>
-              <p className="mt-1 text-xs text-zinc-400">作者：{article.authorId}</p>
+              <p className="mt-1 text-xs text-zinc-400">{t.author}：{article.authorId}</p>
               <p className="mt-1 text-xs text-zinc-400">
-                小说更新：{article.updatedAt || "未知"}
+                {t.update}：{article.updatedAt || (uiLang === "zh" ? "未知" : "N/A")}
               </p>
               <p className="mt-1 text-xs text-zinc-400">
-                阅读模式：
+                {t.readMode}：
                 {article.paymentMode === "free"
-                  ? "免费公开"
-                  : `付费阅读（前 ${article.freePreviewChapters} 章免费）`}
+                  ? t.free
+                  : t.paid(article.freePreviewChapters)}
+              </p>
+              <p className="mt-1 text-xs text-zinc-400">
+                {t.langZone}：{article.languageLabel ?? (uiLang === "zh" ? "中文原文" : "Original Chinese")}
               </p>
               {article.synopsis ? (
                 <p className="mt-3 text-sm text-zinc-300">{article.synopsis}</p>
@@ -418,15 +517,15 @@ export default function ReaderArticlePage({
                     onClick={() => setTocOpen((v) => !v)}
                     className="text-sm font-semibold text-cyan-300 hover:text-cyan-200"
                   >
-                    章节目录 {tocOpen ? "▾" : "▸"}
+                    {t.toc} {tocOpen ? "▾" : "▸"}
                   </button>
                   <span className="text-[11px] text-zinc-500">
-                    可读 {article.chapters.length} / 共 {article.totalChapters} 章
+                    {t.readable(article.chapters.length, article.totalChapters)}
                   </span>
                 </div>
                 {tocOpen ? (
                   article.chapters.length === 0 ? (
-                    <p className="text-xs text-zinc-500">暂无可阅读章节</p>
+                    <p className="text-xs text-zinc-500">{t.noChapter}</p>
                   ) : (
                     <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                       {article.chapters.map((c, idx) => (
@@ -449,7 +548,7 @@ export default function ReaderArticlePage({
                   )
                 ) : (
                   <p className="text-[11px] text-zinc-500">
-                    当前：{chapterTocLabel(chapterIndex, currentChapter?.title)}
+                    {t.current}：{chapterTocLabel(chapterIndex, currentChapter?.title)}
                   </p>
                 )}
                 {hasMoreLockedChapters ? (
@@ -484,21 +583,21 @@ export default function ReaderArticlePage({
                   onClick={() => setChapterIndex((i) => Math.max(0, i - 1))}
                   className="rounded-md border border-zinc-600 px-3 py-1 text-xs text-zinc-300 disabled:opacity-40"
                 >
-                  上一章
+                  {t.prev}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowTipQr((v) => !v)}
                   className="rounded-md border border-amber-500/50 px-3 py-1 text-xs text-amber-300 hover:bg-amber-950/30"
                 >
-                  打赏作者
+                  {t.tip}
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleOpenShare()}
                   className="rounded-md border border-emerald-500/50 px-3 py-1 text-xs text-emerald-300 hover:bg-emerald-950/30"
                 >
-                  社交媒体分享
+                  {t.share}
                 </button>
                 <button
                   type="button"
@@ -510,7 +609,7 @@ export default function ReaderArticlePage({
                   }
                   className="rounded-md border border-cyan-500/40 px-3 py-1 text-xs text-cyan-300 disabled:opacity-40"
                 >
-                  下一章
+                  {t.next}
                 </button>
               </div>
               {hasMoreLockedChapters ? (
@@ -615,18 +714,18 @@ export default function ReaderArticlePage({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-emerald-300">社交媒体作品分享</h3>
+              <h3 className="text-sm font-semibold text-emerald-300">{t.shareTitle}</h3>
               <button
                 type="button"
                 onClick={() => setShareOpen(false)}
                 className="rounded border border-neutral-600 px-2 py-0.5 text-xs text-neutral-300 hover:border-emerald-400 hover:text-emerald-300"
               >
-                关闭
+                {t.close}
               </button>
             </div>
             <div className="rounded-xl border border-[#284056] bg-[#101a2c] p-4 text-center">
               <h4 className="text-base font-semibold text-zinc-100">《{article.title}》作品</h4>
-              <p className="mt-1 text-xs text-zinc-400">读者分享入口（含钱包标记）</p>
+              <p className="mt-1 text-xs text-zinc-400">{t.shareEntry}</p>
               {article.synopsis ? (
                 <p className="mt-2 line-clamp-3 text-[11px] text-zinc-400">{article.synopsis}</p>
               ) : null}
@@ -636,7 +735,7 @@ export default function ReaderArticlePage({
                 </p>
               ) : null}
               <p className="mt-2 break-all text-[10px] text-zinc-500">
-                钱包：{address ?? "未连接"}
+                {t.wallet}：{address ?? (uiLang === "zh" ? "未连接" : "Not connected")}
               </p>
               {shareQrDataUrl ? (
                 <img
@@ -646,7 +745,7 @@ export default function ReaderArticlePage({
                 />
               ) : (
                 <div className="mx-auto mt-4 flex h-[220px] w-[220px] items-center justify-center rounded-lg border border-neutral-700 bg-white p-2 text-xs text-neutral-500">
-                  生成二维码中…
+                  {t.generating}
                 </div>
               )}
               <p className="mt-2 break-all text-[10px] text-zinc-500">
@@ -658,7 +757,7 @@ export default function ReaderArticlePage({
                 onClick={() => void handleDownloadShareImage()}
                 className="mt-3 rounded-md border border-emerald-500/50 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                下载本图片
+                {t.download}
               </button>
             </div>
           </div>
@@ -714,6 +813,43 @@ function drawWrappedCenteredText(
   lines.forEach((l, i) => {
     ctx.fillText(l, centerX, startY + i * lineHeight);
   });
+}
+
+function drawWrappedCenteredTextClamped(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  centerX: number,
+  startY: number,
+  maxWidth: number,
+  lineHeight: number,
+  maxLines: number,
+) {
+  const chars = text.split("");
+  const lines: string[] = [];
+  let line = "";
+  for (const ch of chars) {
+    const test = line + ch;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = ch;
+      if (lines.length >= maxLines) break;
+    } else {
+      line = test;
+    }
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+  const overflowed = lines.length >= maxLines && chars.join("").length > lines.join("").length;
+  if (overflowed && lines.length > 0) {
+    let last = lines[lines.length - 1];
+    while (last.length > 0 && ctx.measureText(`${last}…`).width > maxWidth) {
+      last = last.slice(0, -1);
+    }
+    lines[lines.length - 1] = `${last}…`;
+  }
+  lines.forEach((l, i) => {
+    ctx.fillText(l, centerX, startY + i * lineHeight);
+  });
+  return lines.length;
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {

@@ -13,6 +13,11 @@ type StructurePayload = {
 
 const MAX_MODEL_INPUT_CHARS = 12000;
 type DeviceProfile = "desktop" | "mobile";
+type ImagePlaceholder = { token: string; html: string };
+
+function isImageToken(text: string): boolean {
+  return /^\[\[IMG_\d+\]\]$/.test(text.trim());
+}
 
 function parseDotEnvLine(line: string): [string, string] | null {
   const trimmed = line.trim();
@@ -78,6 +83,34 @@ function htmlToPlainText(html: string): string {
   );
 }
 
+function extractImagePlaceholders(html: string): {
+  htmlWithTokens: string;
+  placeholders: ImagePlaceholder[];
+} {
+  const placeholders: ImagePlaceholder[] = [];
+  let idx = 0;
+  const htmlWithTokens = html.replace(/<img\b[^>]*>/gi, (img) => {
+    idx += 1;
+    const token = `[[IMG_${idx}]]`;
+    placeholders.push({ token, html: img });
+    return `\n\n${token}\n\n`;
+  });
+  return { htmlWithTokens, placeholders };
+}
+
+function ensureImageTokensPresent(text: string, tokens: string[]): string {
+  if (!text.trim()) {
+    return tokens.join("\n\n");
+  }
+  let out = text;
+  for (const token of tokens) {
+    if (!out.includes(token)) {
+      out += `\n\n${token}`;
+    }
+  }
+  return out;
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -88,6 +121,7 @@ function escapeHtml(text: string): string {
 function ensureFirstLineIndent(paragraph: string): string {
   const content = paragraph.trim();
   if (!content) return "";
+  if (isImageToken(content)) return content;
   const stripped = content.replace(/^[\u3000 ]{1,4}/, "");
   return `　　${stripped}`;
 }
@@ -95,6 +129,7 @@ function ensureFirstLineIndent(paragraph: string): string {
 function splitLongParagraph(text: string, profile: DeviceProfile): string[] {
   const src = text.trim();
   if (!src) return [];
+  if (isImageToken(src)) return [src];
   const hardLimit = profile === "mobile" ? 90 : 160;
   const splitStep = profile === "mobile" ? 58 : 90;
   const minLen = profile === "mobile" ? 20 : 40;
@@ -161,17 +196,28 @@ function reflowForProfile(text: string, profile: DeviceProfile): string {
   return out.join("\n\n");
 }
 
-function plainTextToHtml(text: string): string {
+function plainTextToHtml(text: string, placeholders: ImagePlaceholder[] = []): string {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   if (!normalized) return "<p></p>";
   const paragraphs = normalized.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
   if (paragraphs.length === 0) return "<p></p>";
+  const imageMap = new Map(placeholders.map((p) => [p.token, p.html]));
   return paragraphs
-    .map((p) => `<p>${escapeHtml(ensureFirstLineIndent(p)).replace(/\n/g, "<br>")}</p>`)
+    .map((p) => {
+      const token = p.trim();
+      if (isImageToken(token)) {
+        return imageMap.get(token) ?? "";
+      }
+      return `<p>${escapeHtml(ensureFirstLineIndent(p)).replace(/\n/g, "<br>")}</p>`;
+    })
+    .filter(Boolean)
     .join("");
 }
 
-async function formatByDeepSeek(rawText: string): Promise<string | null> {
+async function formatByDeepSeek(
+  rawText: string,
+  imageTokens: string[],
+): Promise<string | null> {
   const envFallback = await readFallbackEnv();
   const apiKey =
     process.env.DEEPSEEK_API_KEY ||
@@ -193,6 +239,9 @@ async function formatByDeepSeek(rawText: string): Promise<string | null> {
     "1) 严禁改剧情：不得新增/删除关键情节、人物、设定、时间线、世界观。",
     "2) 严禁改人名地名术语：专有名词保持原样。",
     "3) 仅做排版与轻微语言整理：断句、分段、标点、重复赘词清理。",
+    imageTokens.length > 0
+      ? `4) 输入中若出现图片占位符（如 ${imageTokens[0]}），必须逐字原样保留，不得删除、改写、合并。`
+      : "4) 若无图片占位符，按普通文本处理。",
     "",
     "【排版规则（必须执行）】",
     "1) 每个自然段首行缩进两个全角空格（即“　　”）。",
@@ -284,16 +333,19 @@ export async function autoFormatChaptersForPublish(params: {
       typeof chapterHtmlRaw === "string" && chapterHtmlRaw.trim().length > 0
         ? chapterHtmlRaw
         : "<p></p>";
-    const text = htmlToPlainText(chapterHtml);
+    const { htmlWithTokens, placeholders } = extractImagePlaceholders(chapterHtml);
+    const imageTokens = placeholders.map((x) => x.token);
+    const text = htmlToPlainText(htmlWithTokens);
     if (!text) continue;
-    let formatted = await formatByDeepSeek(text);
+    let formatted = await formatByDeepSeek(text, imageTokens);
     if (formatted === null) {
       formatted = fallbackFormatPlainText(text, "desktop");
     }
+    formatted = ensureImageTokensPresent(formatted, imageTokens);
     const desktopText = reflowForProfile(formatted, "desktop");
     const mobileText = reflowForProfile(formatted, "mobile");
-    const htmlDesktop = plainTextToHtml(desktopText);
-    const htmlMobile = plainTextToHtml(mobileText);
+    const htmlDesktop = plainTextToHtml(desktopText, placeholders);
+    const htmlMobile = plainTextToHtml(mobileText, placeholders);
     const metadata = {
       ...(node.metadata ?? {}),
       chapterHtml: htmlDesktop,

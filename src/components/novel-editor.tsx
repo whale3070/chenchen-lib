@@ -2,6 +2,10 @@
 
 import type { Editor } from "@tiptap/core";
 import Image from "@tiptap/extension-image";
+import { Table } from "@tiptap/extension-table";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
+import { TableRow } from "@tiptap/extension-table-row";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { marked } from "marked";
@@ -17,6 +21,7 @@ import {
 
 import { FileDown, FileUp, Rocket } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 import { OutlineSidebar } from "@/components/outline-sidebar";
 import { PublishNovelModal } from "@/components/publish-novel-modal";
@@ -110,6 +115,8 @@ const CHAPTER_CN_TO_NUM: Record<string, number> = {
 };
 
 const MARKDOWN_EDITOR_POPUP_MESSAGE_TYPE = "chenchen:markdown-editor-publish";
+const TRANSLATION_EDITOR_SESSION_PREFIX = "translation-editor-pair:";
+type ChapterizeMode = "auto" | "rule" | "llm";
 
 function parseChapterNoFromTitle(title: string): number | null {
   const t = title.trim();
@@ -201,7 +208,7 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Markdown 编辑器（支持表格）</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <style>
       :root {
         color-scheme: dark;
@@ -341,15 +348,24 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
       const applyBtn = document.getElementById("apply-btn");
       input.value = initialMarkdown || "";
 
-      const renderPreview = () => {
+      const renderPreview = async () => {
         const md = input.value || "";
+        if (window.marked && typeof window.marked.setOptions === "function") {
+          window.marked.setOptions({ breaks: true, gfm: true });
+        }
         const parser = window.marked && typeof window.marked.parse === "function"
-          ? window.marked.parse
+          ? (txt) => window.marked.parse(txt)
           : (txt) => txt.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\\n/g, "<br>");
-        preview.innerHTML = parser(md, { breaks: true });
+        const maybeRendered = parser(md);
+        const rendered = maybeRendered && typeof maybeRendered.then === "function"
+          ? await maybeRendered
+          : maybeRendered;
+        preview.innerHTML = typeof rendered === "string" ? rendered : "";
       };
 
-      input.addEventListener("input", renderPreview);
+      input.addEventListener("input", () => {
+        void renderPreview();
+      });
       cancelBtn.addEventListener("click", () => window.close());
       applyBtn.addEventListener("click", () => {
         if (window.opener) {
@@ -365,7 +381,7 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
         window.close();
       });
 
-      renderPreview();
+      void renderPreview();
       input.focus();
     </script>
   </body>
@@ -387,6 +403,7 @@ function upsertChapterHtml(nodes: PlotNode[], chapterId: string, html: string): 
 }
 
 export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
+  const searchParams = useSearchParams();
   const [manageTab, setManageTab] = useState<"personas" | "outline" | "finance">(
     "personas",
   );
@@ -481,6 +498,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const importTxtInputRef = useRef<HTMLInputElement | null>(null);
   const aiImportTxtInputRef = useRef<HTMLInputElement | null>(null);
   const [aiChapterizing, setAiChapterizing] = useState(false);
+  const [chapterizeMode, setChapterizeMode] = useState<ChapterizeMode>("auto");
   const uploadZipInputRef = useRef<HTMLInputElement | null>(null);
   const uploadImageInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadingImages, setUploadingImages] = useState(false);
@@ -488,10 +506,49 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const [uploadedImageItems, setUploadedImageItems] = useState<
     Array<{ name: string; url: string }>
   >([]);
+  const [translationCompareOpen, setTranslationCompareOpen] = useState(false);
+  const [translationSourceMarkdown, setTranslationSourceMarkdown] = useState("");
+  const [translationResultMarkdown, setTranslationResultMarkdown] = useState("");
+  const [translationTargetLanguage, setTranslationTargetLanguage] = useState("");
 
   useEffect(() => {
     if (!authorId) draftLoadedKeyRef.current = null;
   }, [authorId]);
+
+  useEffect(() => {
+    const pairKey = searchParams.get("translationPairKey");
+    if (!pairKey || typeof window === "undefined") return;
+    if (!pairKey.startsWith(TRANSLATION_EDITOR_SESSION_PREFIX)) return;
+    try {
+      const raw = window.sessionStorage.getItem(pairKey);
+      if (!raw) return;
+      const payload = JSON.parse(raw) as {
+        novelId?: unknown;
+        sourceText?: unknown;
+        translatedText?: unknown;
+        targetLanguage?: unknown;
+      };
+      const targetNovelId =
+        typeof payload.novelId === "string" ? payload.novelId : "";
+      if (targetNovelId !== novelId) return;
+      const sourceText =
+        typeof payload.sourceText === "string" ? payload.sourceText : "";
+      const translatedText =
+        typeof payload.translatedText === "string" ? payload.translatedText : "";
+      const targetLang =
+        typeof payload.targetLanguage === "string" ? payload.targetLanguage : "";
+      setTranslationSourceMarkdown(sourceText);
+      setTranslationResultMarkdown(translatedText);
+      setTranslationTargetLanguage(targetLang);
+      setTranslationCompareOpen(true);
+      window.sessionStorage.removeItem(pairKey);
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("translationPairKey");
+      window.history.replaceState({}, "", nextUrl.toString());
+    } catch {
+      // ignore parse errors
+    }
+  }, [novelId, searchParams]);
 
   useEffect(() => {
     setNovelTitleForHeader(null);
@@ -1010,6 +1067,12 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         inline: false,
         allowBase64: false,
       }),
+      Table.configure({
+        resizable: true,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
       SelectionLock,
       SimulationShortcut.configure({
         onModShiftA: (ed) => {
@@ -1536,13 +1599,16 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         renderedHtml?: unknown;
       };
       if (payload.type !== MARKDOWN_EDITOR_POPUP_MESSAGE_TYPE) return;
-      const renderedHtml =
-        typeof payload.renderedHtml === "string"
-          ? payload.renderedHtml
-          : typeof payload.markdown === "string"
-            ? ((marked.parse(payload.markdown, { breaks: true }) as string) ?? "")
-            : "";
-      void publishCurrentChapterFromMarkdown(renderedHtml).catch((e) => {
+      void (async () => {
+        let renderedHtml = "";
+        if (typeof payload.renderedHtml === "string") {
+          renderedHtml = payload.renderedHtml;
+        } else if (typeof payload.markdown === "string") {
+          const maybe = marked.parse(payload.markdown, { breaks: true, gfm: true });
+          renderedHtml = typeof maybe === "string" ? maybe : await maybe;
+        }
+        await publishCurrentChapterFromMarkdown(renderedHtml);
+      })().catch((e) => {
         window.alert(e instanceof Error ? e.message : "发布失败");
       });
     };
@@ -1614,7 +1680,11 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       }
       if (
         !window.confirm(
-          "将调用 DeepSeek 自动排版并切分章节，此操作会覆盖当前章节结构和稿面内容。是否继续？",
+          chapterizeMode === "rule"
+            ? "将按本地规则快速切章，此操作会覆盖当前章节结构和稿面内容。是否继续？"
+            : chapterizeMode === "llm"
+              ? "将调用豆包智能切章，此操作会覆盖当前章节结构和稿面内容。是否继续？"
+              : "将自动选择切章策略（优先本地规则，必要时调用豆包），此操作会覆盖当前章节结构和稿面内容。是否继续？",
         )
       ) {
         return;
@@ -1634,12 +1704,14 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             const r = await fetch("/api/v1/ai/chapterize", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text }),
+              body: JSON.stringify({ text, mode: chapterizeMode }),
             });
             const data = (await r.json()) as {
               chapters?: Array<{ title: string; content: string }>;
               error?: string;
               usedFallback?: boolean;
+              engine?: "rule" | "llm" | "fallback";
+              truncated?: boolean;
             };
             if (!r.ok || !Array.isArray(data.chapters) || data.chapters.length === 0) {
               throw new Error(data.error ?? "AI 切章失败");
@@ -1668,6 +1740,41 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
 
             setOutlineNodes(nextNodes);
             void postOutlineStructure(nextNodes);
+            const latestChapterIds = nextNodes
+              .filter((n) => n.kind === "chapter")
+              .map((n) => n.id);
+
+            // 根治：重切章会重建 chapterId，需同步发布记录里的 publishedChapterIds，
+            // 否则读者端按旧 ID 过滤时可能出现整篇空白。
+            if (latestChapterIds.length > 0 && publishRecord?.visibility === "public") {
+              try {
+                const syncResp = await fetch("/api/v1/novel-publish", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "x-wallet-address": authorId,
+                  },
+                  body: JSON.stringify({
+                    action: "publish_all_chapters",
+                    authorId,
+                    novelId,
+                    allChapterIds: latestChapterIds,
+                    layoutMode: publishLayoutMode,
+                  }),
+                });
+                const syncData = (await syncResp.json()) as {
+                  record?: NovelPublishRecord;
+                  error?: string;
+                };
+                if (syncResp.ok && syncData.record) {
+                  setPublishRecord(syncData.record);
+                } else {
+                  window.alert(syncData.error ?? "章节重建后同步发布状态失败，请手动点击“一键发布全部章节”。");
+                }
+              } catch {
+                window.alert("章节重建后同步发布状态失败，请手动点击“一键发布全部章节”。");
+              }
+            }
 
             const firstChapter = nextNodes.find((n) => n.kind === "chapter");
             const firstHtml = firstChapter
@@ -1678,8 +1785,15 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             setDocTick((t) => t + 1);
             flushWritingContext(editorInstance);
 
-            if (data.usedFallback) {
-              window.alert("DeepSeek 返回异常，已使用本地规则完成基础切章。");
+            if (data.engine === "rule") {
+              window.alert("已按本地规则完成切章。");
+            } else if (data.engine === "llm") {
+              window.alert("已按豆包智能切章完成导入。");
+            } else if (data.usedFallback || data.engine === "fallback") {
+              window.alert("豆包返回异常，已使用本地规则完成切章。");
+            }
+            if (data.truncated) {
+              window.alert("切章结果已触发章节数量上限（2000），仅保留前 2000 章。");
             }
           } catch (err) {
             window.alert(err instanceof Error ? err.message : "AI 切章失败");
@@ -1693,7 +1807,16 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       };
       reader.readAsArrayBuffer(file);
     },
-    [authorId, editorInstance, flushWritingContext, postOutlineStructure],
+    [
+      authorId,
+      chapterizeMode,
+      editorInstance,
+      flushWritingContext,
+      novelId,
+      postOutlineStructure,
+      publishLayoutMode,
+      publishRecord?.visibility,
+    ],
   );
 
   const uploadToImageHost = useCallback(
@@ -2103,7 +2226,11 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                   : isPublishedChapterReadOnly
                     ? "当前章节已发布且为只读，请切换到“编辑”后再导入"
                     : authorId
-                  ? "调用 DeepSeek 自动排版并切分为第一章、第二章..."
+                  ? chapterizeMode === "rule"
+                    ? "按本地规则快速切章（稳定、低延迟）"
+                    : chapterizeMode === "llm"
+                      ? "调用豆包智能切章（语义更强）"
+                      : "自动选择切章策略：有明显章节标记时走本地规则，否则调用豆包"
                   : ""
               }
               className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1.5 text-xs font-medium text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
@@ -2111,6 +2238,20 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
               <FileUp className="h-3.5 w-3.5 shrink-0" aria-hidden />
               {aiChapterizing ? "AI 切章中…" : "AI智能切章导入"}
             </button>
+            <label className="inline-flex items-center gap-1 text-[11px] text-neutral-600 dark:text-neutral-300">
+              <span>切章模式</span>
+              <select
+                value={chapterizeMode}
+                onChange={(e) => setChapterizeMode(e.target.value as ChapterizeMode)}
+                disabled={!authorId || aiChapterizing || isPublishedChapterReadOnly}
+                className="rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-800 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
+                title="选择切章策略"
+              >
+                <option value="auto">自动（推荐）</option>
+                <option value="rule">快速切章（规则）</option>
+                <option value="llm">智能切章（豆包）</option>
+              </select>
+            </label>
             <button
               type="button"
               disabled={!authorId}
@@ -2452,6 +2593,95 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           </div>
         </div>
       </main>
+      {translationCompareOpen ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setTranslationCompareOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="翻译 Markdown 对照编辑器"
+            className="flex h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-[#2a3a54] bg-[#0b1320] shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#1e2a3f] px-4 py-2">
+              <div>
+                <h3 className="text-sm font-semibold text-cyan-300">
+                  翻译 Markdown 对照编辑器
+                </h3>
+                <p className="text-[11px] text-zinc-500">
+                  左侧原文，右侧译文。可直接修改译文并应用到当前章节。
+                  {translationTargetLanguage
+                    ? ` 目标语言：${translationTargetLanguage.toUpperCase()}`
+                    : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await copyText(translationResultMarkdown);
+                    window.alert(ok ? "译文已复制" : "复制失败，请手动复制");
+                  }}
+                  className="rounded-md border border-neutral-500/50 px-3 py-1 text-xs text-zinc-200 hover:bg-neutral-700/30"
+                >
+                  复制译文
+                </button>
+                <button
+                  type="button"
+                  disabled={!authorId || isPublishedChapterReadOnly}
+                  onClick={() => {
+                    const rendered =
+                      ((marked.parse(translationResultMarkdown, {
+                        breaks: true,
+                      }) as string) ?? "");
+                    void publishCurrentChapterFromMarkdown(rendered)
+                      .then(() => {
+                        window.alert("译文已应用到当前章节");
+                        setTranslationCompareOpen(false);
+                      })
+                      .catch((e) => {
+                        window.alert(e instanceof Error ? e.message : "应用失败");
+                      });
+                  }}
+                  className="rounded-md border border-emerald-400/60 px-3 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  应用译文到当前章节
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTranslationCompareOpen(false)}
+                  className="rounded-md border border-neutral-500/50 px-3 py-1 text-xs text-zinc-200 hover:bg-neutral-700/30"
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
+              <div className="border-r border-[#1e2a3f] p-3">
+                <p className="mb-2 text-xs font-medium text-zinc-300">原文（Markdown）</p>
+                <textarea
+                  value={translationSourceMarkdown}
+                  onChange={(e) => setTranslationSourceMarkdown(e.target.value)}
+                  className="h-full min-h-[320px] w-full resize-none rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                />
+              </div>
+              <div className="p-3">
+                <p className="mb-2 text-xs font-medium text-zinc-300">译文（Markdown）</p>
+                <textarea
+                  value={translationResultMarkdown}
+                  onChange={(e) => setTranslationResultMarkdown(e.target.value)}
+                  className="h-full min-h-[320px] w-full resize-none rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <PublishNovelModal
         open={publishModalOpen}
         onClose={() => setPublishModalOpen(false)}

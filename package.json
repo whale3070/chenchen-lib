@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "worker:ai-reflow": "tsx src/workers/ai-reflow-worker.ts",
     "lint": "eslint"
   },
   "dependencies": {
@@ -25,9 +26,11 @@
     "@tiptap/pm": "^3.21.0",
     "@tiptap/react": "^3.21.0",
     "@tiptap/starter-kit": "^3.21.0",
+    "bullmq": "^5.56.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
+    "ioredis": "^5.6.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.7.0",
     "marked": "^17.0.5",
@@ -35,7 +38,10 @@
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.0",
+    "tsx": "^4.20.3",
     "viem": "^2.47.6",
     "wagmi": "^3.6.0",
     "zustand": "^5.0.12"

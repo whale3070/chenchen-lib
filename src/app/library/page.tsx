@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { ReaderAiRecommendPanel } from "@/components/reader-ai-recommend-panel";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 
 type LibraryItem = {
@@ -16,6 +17,7 @@ type LibraryItem = {
 };
 
 const READER_LANG_PREF_KEY = "chenchen:reader:library:langs";
+const READER_RECOMMEND_COLLAPSED_KEY = "chenchen:reader:library:recommend-collapsed";
 
 export default function LibraryPage() {
   const {
@@ -30,7 +32,8 @@ export default function LibraryPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"library" | "settings">("library");
-  const [selectedLangs, setSelectedLangs] = useState<string[]>(["en"]);
+  const [selectedLangs, setSelectedLangs] = useState<string[]>(["zh"]);
+  const [recommendCollapsed, setRecommendCollapsed] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -64,12 +67,42 @@ export default function LibraryPage() {
   }, []);
 
   useEffect(() => {
+    // 兜底：若当前语言筛选导致空列表，但书库里存在中文作品，则自动补上中文可见。
+    if (items.length === 0 || selectedLangs.includes("zh")) return;
+    const hasZhItems = items.some((item) => item.language === "zh");
+    const hasAnyVisible = items.some((item) => selectedLangs.includes(item.language));
+    if (hasZhItems && !hasAnyVisible) {
+      setSelectedLangs((prev) => Array.from(new Set([...prev, "zh"])));
+    }
+  }, [items, selectedLangs]);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(READER_LANG_PREF_KEY, JSON.stringify(selectedLangs));
     } catch {
       // ignore
     }
   }, [selectedLangs]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(READER_RECOMMEND_COLLAPSED_KEY);
+      if (raw === "1") setRecommendCollapsed(true);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        READER_RECOMMEND_COLLAPSED_KEY,
+        recommendCollapsed ? "1" : "0",
+      );
+    } catch {
+      // ignore
+    }
+  }, [recommendCollapsed]);
 
   const handleOpenArticle = async (articleId: string, language: string) => {
     const target =
@@ -119,7 +152,31 @@ export default function LibraryPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050810] px-6 py-10 text-zinc-200">
+    <div className="flex min-h-screen flex-col bg-[#050810] text-zinc-200 md:flex-row">
+      <aside
+        className={[
+          "flex shrink-0 flex-col border-[#1b2b43] bg-[#050810]",
+          recommendCollapsed
+            ? "h-auto w-full border-b md:h-screen md:w-12 md:border-b-0 md:border-r"
+            : "h-[42vh] w-full border-b md:h-screen md:w-[32%] md:min-w-[260px] md:max-w-[380px] md:border-b-0 md:border-r",
+        ].join(" ")}
+      >
+        {recommendCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setRecommendCollapsed(false)}
+            className="flex h-11 w-full items-center justify-center text-xs font-medium text-cyan-300 hover:bg-[#0d1524] md:h-full"
+            title="展开 AI 小说推荐助手"
+          >
+            <span className="md:[writing-mode:vertical-rl]">
+              展开助手
+            </span>
+          </button>
+        ) : (
+          <ReaderAiRecommendPanel onCollapse={() => setRecommendCollapsed(true)} />
+        )}
+      </aside>
+      <main className="min-h-0 flex-1 overflow-y-auto px-6 py-10">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-semibold text-cyan-300">读者书库 · 文章 ID</h1>
@@ -214,15 +271,17 @@ export default function LibraryPage() {
                         disabled={isConnectPending}
                         className="w-full cursor-pointer text-left disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        <p className="text-sm font-medium text-zinc-100 hover:text-cyan-300">
+                        <p className="break-words text-sm font-medium text-zinc-100 [overflow-wrap:anywhere] hover:text-cyan-300">
                           {item.title}
                         </p>
                         {item.synopsis ? (
-                          <p className="mt-1 line-clamp-2 text-xs text-zinc-400">
+                          <p className="mt-1 line-clamp-2 break-words text-xs text-zinc-400 [overflow-wrap:anywhere]">
                             {item.synopsis}
                           </p>
                         ) : null}
-                        <p className="mt-1 text-xs text-zinc-400">文章ID：{item.articleId}</p>
+                        <p className="mt-1 break-all text-xs text-zinc-400">
+                          文章ID：{item.articleId}
+                        </p>
                         <p className="mt-1 text-xs text-zinc-500">
                           语言：{item.language.toUpperCase()}
                         </p>
@@ -236,6 +295,7 @@ export default function LibraryPage() {
           </div>
         )}
       </div>
+      </main>
 
       {walletGuideOpen ? (
         <div

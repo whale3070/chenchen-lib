@@ -8,6 +8,8 @@ export type SelectionJson = Record<string, unknown>;
 export type WritingContextPayload = {
   html: string | null;
   json: unknown | null;
+  chapterId?: string | null;
+  chapterHash?: string | null;
   selection: { from: number; to: number } | null;
   selectionJson: SelectionJson | null;
   lastActionTimestamp: number;
@@ -91,6 +93,18 @@ function remoteToPayload(data: Record<string, unknown>): WritingContextPayload {
   return {
     html: typeof data.html === "string" ? data.html : null,
     json: data.json ?? null,
+    chapterId:
+      typeof data.chapterId === "string"
+        ? data.chapterId
+        : data.chapterId === null
+          ? null
+          : undefined,
+    chapterHash:
+      typeof data.chapterHash === "string"
+        ? data.chapterHash
+        : data.chapterHash === null
+          ? null
+          : undefined,
     selection,
     selectionJson,
     lastActionTimestamp,

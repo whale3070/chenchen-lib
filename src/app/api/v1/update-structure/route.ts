@@ -36,12 +36,33 @@ function parseNodes(raw: unknown): PlotNode[] | null {
   if (!Array.isArray(raw)) return null;
   if (raw.length > 500) return null;
   for (const item of raw) {
-    if (!isPlainObject(item)) return null;
-    if (typeof item.id !== "string" || item.id.length === 0) return null;
-    if (typeof item.kind !== "string") return null;
-    if (typeof item.title !== "string") return null;
+    if (!parseNode(item)) return null;
   }
   return raw as PlotNode[];
+}
+
+function parseNode(raw: unknown): PlotNode | null {
+  if (!isPlainObject(raw)) return null;
+  if (typeof raw.id !== "string" || raw.id.length === 0) return null;
+  if (typeof raw.kind !== "string") return null;
+  if (typeof raw.title !== "string") return null;
+  return raw as unknown as PlotNode;
+}
+
+async function readStructureNodes(authorId: string, docId: string): Promise<PlotNode[] | null> {
+  const fp = await structurePath(authorId, docId);
+  try {
+    const raw = await fs.readFile(fp, "utf8");
+    const data = JSON.parse(raw) as StructurePayload;
+    return Array.isArray(data?.nodes) ? data.nodes : null;
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return null;
+    throw e;
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -98,14 +119,30 @@ export async function POST(req: NextRequest) {
     typeof o.docId === "string" && o.docId.length > 0 ? o.docId : DEFAULT_DOC_ID;
 
   const nodes = parseNodes(o.nodes);
-  if (!nodes) {
-    return badRequest("Invalid nodes array");
+  let nextNodes: PlotNode[] | null = null;
+
+  if (nodes) {
+    nextNodes = nodes;
+  } else {
+    const chapterId = typeof o.chapterId === "string" ? o.chapterId.trim() : "";
+    const chapterNode = parseNode(o.chapterNode);
+    if (!chapterId || !chapterNode || chapterNode.kind !== "chapter") {
+      return badRequest("Invalid nodes array");
+    }
+    if (chapterNode.id !== chapterId) {
+      return badRequest("chapterId and chapterNode.id mismatch");
+    }
+    const currentNodes = (await readStructureNodes(authorId, docId)) ?? [];
+    const found = currentNodes.some((n) => n.id === chapterId);
+    nextNodes = found
+      ? currentNodes.map((n) => (n.id === chapterId ? chapterNode : n))
+      : [...currentNodes, chapterNode];
   }
 
   const payload: StructurePayload = {
     authorId: authorId.toLowerCase(),
     docId,
-    nodes,
+    nodes: nextNodes,
     updatedAt: new Date().toISOString(),
   };
 

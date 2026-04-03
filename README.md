@@ -34,3 +34,19 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## AI 自动排版队列（Redis + BullMQ）
+
+公开发布且选择 **AI 自动排版** 时，排版任务会进入 Redis 队列，由**独立进程**消费，避免占用 `next start` 进程导致 `save-draft` / `update-structure` 长时间 `pending`。
+
+1. 安装并启动 Redis（示例本机）  
+2. 配置环境变量 `REDIS_URL`（例：`redis://127.0.0.1:6379`）  
+3. 启动 Web：`npm run start`  
+4. 另开终端启动 worker（在 `apps/web` 目录）：
+
+```bash
+export REDIS_URL=redis://127.0.0.1:6379
+npm run worker:ai-reflow
+```
+
+生产环境建议用 `tmux` / `pm2` / `systemd` 常驻 worker。

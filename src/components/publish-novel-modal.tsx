@@ -64,6 +64,7 @@ export function PublishNovelModal({
   const [weeklyN, setWeeklyN] = useState(3);
   const [refundRuleAck, setRefundRuleAck] = useState(false);
   const [layoutMode, setLayoutMode] = useState<PublishLayoutMode>("preserve");
+  const [tagDraft, setTagDraft] = useState("");
   const [metaGeneratedBy, setMetaGeneratedBy] = useState<"deepseek" | "fallback" | null>(
     null,
   );
@@ -87,6 +88,7 @@ export function PublishNovelModal({
       }
       setRefundRuleAck(savedRecord.refundRuleAck);
       setLayoutMode(savedRecord.layoutMode ?? "preserve");
+      setTagDraft("");
       setMetaGeneratedBy(null);
     } else {
       setSynopsis(initialSynopsis);
@@ -103,6 +105,7 @@ export function PublishNovelModal({
       setWeeklyN(3);
       setRefundRuleAck(false);
       setLayoutMode("preserve");
+      setTagDraft("");
       setMetaGeneratedBy(null);
     }
   }, [open, savedRecord, initialSynopsis, initialTags]);
@@ -160,6 +163,23 @@ export function PublishNovelModal({
     if (!submitting) onClose();
   };
 
+  const commitTagDraft = useCallback(() => {
+    const next = tagDraft
+      .replace(/#/g, " ")
+      .split(/[,\n，、\s]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (next.length === 0) return;
+    setTags((prev) => {
+      const merged = [...prev];
+      for (const t of next) {
+        if (!merged.includes(t)) merged.push(t);
+      }
+      return merged.slice(0, 12);
+    });
+    setTagDraft("");
+  }, [tagDraft]);
+
   return (
     <AnimatePresence>
       {open ? (
@@ -207,7 +227,7 @@ export function PublishNovelModal({
                   </div>
                 </label>
                 <div className="mt-3 flex items-center justify-between gap-2">
-                  <span className="text-xs text-zinc-400">作品简介（DeepSeek 自动生成）</span>
+                  <span className="text-xs text-zinc-400">作品简介（AI 自动生成，可手动微调）</span>
                   <button
                     type="button"
                     disabled={metaGenerating || submitting}
@@ -225,22 +245,53 @@ export function PublishNovelModal({
                       ? "fallback"
                       : "未生成"}
                 </p>
-                <div className={fieldClass + " min-h-[86px] whitespace-pre-wrap text-zinc-200"}>
-                  {synopsis || "暂无简介，点击“重新生成”自动填写。"}
-                </div>
+                <textarea
+                  value={synopsis}
+                  onChange={(e) => setSynopsis(e.target.value.slice(0, 5000))}
+                  rows={5}
+                  className={fieldClass + " min-h-[110px] resize-y text-zinc-200"}
+                  placeholder="可手动修改 AI 生成的简介"
+                />
                 <div className="mt-3">
-                  <span className="text-xs text-zinc-400">作品标签（DeepSeek 自动生成）</span>
+                  <span className="text-xs text-zinc-400">作品标签（AI 生成后可手动增删）</span>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={tagDraft}
+                      onChange={(e) => setTagDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        e.preventDefault();
+                        commitTagDraft();
+                      }}
+                      className={fieldClass + " !mt-0 flex-1 py-1.5 text-xs"}
+                      placeholder="输入标签后回车（支持逗号分隔）"
+                    />
+                    <button
+                      type="button"
+                      onClick={commitTagDraft}
+                      disabled={submitting || metaGenerating}
+                      className="rounded border border-[#4fc3f7]/40 px-2 py-1 text-[11px] text-[#4fc3f7] hover:bg-[#4fc3f7]/10 disabled:opacity-40"
+                    >
+                      添加
+                    </button>
+                  </div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {tags.length === 0 ? (
                       <span className="text-[11px] text-zinc-500">暂无标签</span>
                     ) : (
                       tags.map((t) => (
-                        <span
+                        <button
                           key={t}
+                          type="button"
+                          onClick={() =>
+                            setTags((prev) => prev.filter((x) => x !== t))
+                          }
                           className="rounded-full border border-[#4fc3f7]/35 bg-[#0a0e17] px-2 py-0.5 text-[11px] text-[#4fc3f7]"
+                          title="点击移除标签"
                         >
-                          #{t}
-                        </span>
+                          #{t} ×
+                        </button>
                       ))
                     )}
                   </div>

@@ -184,6 +184,23 @@ async function readChapterText(
   return htmlToPlainText(htmlCandidate);
 }
 
+async function readAllChapterText(authorLower: string, novelId: string): Promise<string> {
+  const raw = await fs.readFile(structurePath(authorLower, novelId), "utf8");
+  const structure = JSON.parse(raw) as StructurePayload;
+  const chapterTexts = (structure.nodes ?? [])
+    .filter((n) => n.kind === "chapter")
+    .map((chapter) => {
+      const htmlCandidate =
+        chapter?.metadata?.chapterHtmlMobile ??
+        chapter?.metadata?.chapterHtmlDesktop ??
+        chapter?.metadata?.chapterHtml;
+      return typeof htmlCandidate === "string" ? htmlToPlainText(htmlCandidate) : "";
+    })
+    .map((t) => t.trim())
+    .filter(Boolean);
+  return chapterTexts.join("\n\n").trim();
+}
+
 async function readDraftText(authorLower: string, novelId: string): Promise<string> {
   const raw = await fs.readFile(draftPath(authorLower, novelId), "utf8");
   const draft = JSON.parse(raw) as { html?: unknown };
@@ -512,8 +529,18 @@ export async function POST(req: NextRequest) {
     if (sourceType === "chapter") {
       if (!chapterId) return badRequest("Missing chapterId");
       sourceText = await readChapterText(wh.walletLower, novelId, chapterId);
+      // 兜底：章节正文为空时，回退到草稿；草稿仍为空再回退到整本章节拼接。
+      if (!sourceText.trim()) {
+        sourceText = await readDraftText(wh.walletLower, novelId).catch(() => "");
+      }
+      if (!sourceText.trim()) {
+        sourceText = await readAllChapterText(wh.walletLower, novelId).catch(() => "");
+      }
     } else if (sourceType === "draft") {
       sourceText = await readDraftText(wh.walletLower, novelId);
+      if (!sourceText.trim()) {
+        sourceText = await readAllChapterText(wh.walletLower, novelId).catch(() => "");
+      }
     } else {
       sourceText = manualText.trim();
     }

@@ -15,6 +15,8 @@ type DraftPayload = {
   docId: string;
   html: string;
   json: unknown;
+  chapterId?: string | null;
+  chapterHash?: string | null;
   selection: { from: number; to: number };
   updatedAt: string;
   /** ProseMirror Selection.toJSON() */
@@ -24,6 +26,8 @@ type DraftPayload = {
   writingSnippet?: string;
 };
 
+type SaveDraftMode = "full" | "patch_lite";
+
 async function draftPath(authorId: string, docId: string) {
   const fp = getDraftFilePath(process.cwd(), authorId, docId);
   await fs.mkdir(path.dirname(fp), { recursive: true });
@@ -32,6 +36,22 @@ async function draftPath(authorId: string, docId: string) {
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+async function readDraftPayload(fp: string): Promise<DraftPayload | null> {
+  try {
+    const raw = await fs.readFile(fp, "utf8");
+    const data = JSON.parse(raw) as DraftPayload;
+    if (!data || typeof data !== "object") return null;
+    return data;
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return null;
+    throw e;
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -47,6 +67,7 @@ export async function POST(req: NextRequest) {
   }
 
   const b = body as Record<string, unknown>;
+  const mode: SaveDraftMode = b.mode === "patch_lite" ? "patch_lite" : "full";
   const authorId = typeof b.authorId === "string" ? b.authorId : "";
   if (!isAddress(authorId)) {
     return badRequest("Invalid authorId (Ethereum address)");
@@ -54,8 +75,12 @@ export async function POST(req: NextRequest) {
 
   const docId =
     typeof b.docId === "string" && b.docId.length > 0 ? b.docId : DEFAULT_DOC_ID;
-  const html = typeof b.html === "string" ? b.html : "";
-  const json = b.json;
+  const hasHtml = typeof b.html === "string";
+  const hasJson = Object.prototype.hasOwnProperty.call(b, "json");
+  const chapterIdRaw = typeof b.chapterId === "string" ? b.chapterId.trim() : "";
+  const chapterId = chapterIdRaw.length > 0 ? chapterIdRaw : null;
+  const chapterHashRaw = typeof b.chapterHash === "string" ? b.chapterHash.trim() : "";
+  const chapterHash = chapterHashRaw.length > 0 ? chapterHashRaw : null;
   const sel = b.selection;
   let selection = { from: 0, to: 0 };
   if (sel && typeof sel === "object" && "from" in sel) {
@@ -83,11 +108,16 @@ export async function POST(req: NextRequest) {
   const writingSnippet =
     typeof b.writingSnippet === "string" ? b.writingSnippet.slice(0, 500) : "";
 
+  const fp = await draftPath(authorId.toLowerCase(), docId);
+  const previous = mode === "patch_lite" ? await readDraftPayload(fp) : null;
+
   const payload: DraftPayload = {
     authorId: authorId.toLowerCase(),
     docId,
-    html,
-    json,
+    html: hasHtml ? (b.html as string) : (previous?.html ?? ""),
+    json: hasJson ? b.json : (previous?.json ?? null),
+    chapterId,
+    chapterHash,
     selection,
     updatedAt: new Date().toISOString(),
     selectionJson:
@@ -99,7 +129,6 @@ export async function POST(req: NextRequest) {
     writingSnippet,
   };
 
-  const fp = await draftPath(payload.authorId, docId);
   await fs.writeFile(fp, JSON.stringify(payload), "utf8");
   try {
     await trackWalletEvent({
@@ -130,6 +159,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       html: data.html ?? null,
       json: data.json ?? null,
+      chapterId: data.chapterId ?? null,
+      chapterHash: data.chapterHash ?? null,
       selection: data.selection ?? null,
       updatedAt: data.updatedAt ?? null,
       selectionJson: data.selectionJson ?? null,

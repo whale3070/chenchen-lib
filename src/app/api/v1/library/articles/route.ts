@@ -22,6 +22,7 @@ type PublishRecordLite = {
   paymentMode?: "free" | "paid";
   publishedAt?: string;
   publishedChapterIds?: string[];
+  firstLineIndent?: boolean;
 };
 
 type TranslationStore = {
@@ -54,6 +55,7 @@ type StructurePayload = {
       chapterHtml?: unknown;
       chapterHtmlDesktop?: unknown;
       chapterHtmlMobile?: unknown;
+      chapterMarkdown?: unknown;
       [k: string]: unknown;
     };
   }>;
@@ -98,7 +100,20 @@ async function readPublishRecords() {
     const filePath = path.join(dir, file.name);
     try {
       const raw = await fs.readFile(filePath, "utf8");
-      records.push({ filePath, data: JSON.parse(raw) as PublishRecordLite });
+      const data = JSON.parse(raw) as PublishRecordLite;
+      // 兼容旧/异常发布记录：若缺 authorId 或 novelId，尝试从文件名回填。
+      // 文件名形如 <authorLower>_<safeNovelId>.json
+      if (!data.authorId || !data.novelId) {
+        const base = path.basename(filePath, ".json");
+        const sep = base.indexOf("_");
+        if (sep > 0 && sep < base.length - 1) {
+          const inferredAuthor = base.slice(0, sep).trim().toLowerCase();
+          const inferredNovel = base.slice(sep + 1).trim();
+          if (!data.authorId && inferredAuthor) data.authorId = inferredAuthor;
+          if (!data.novelId && inferredNovel) data.novelId = inferredNovel;
+        }
+      }
+      records.push({ filePath, data });
     } catch {
       // ignore invalid files
     }
@@ -287,6 +302,161 @@ function plainTextToHtml(text: string): string {
     .join("");
 }
 
+function splitPlainTextParagraphs(text: string): string[] {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/\n{2,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+type ImagePlaceholder = {
+  token: string;
+  html: string;
+  sourceParagraphIndex: number;
+};
+
+function splitParagraphs(text: string): string[] {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/\n{2,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function extractImagePlaceholdersWithPositions(sourceHtml: string): {
+  placeholders: ImagePlaceholder[];
+  sourceParagraphCount: number;
+} {
+  let idx = 0;
+  const tokensInOrder: string[] = [];
+  const imageMap = new Map<string, string>();
+  const htmlWithTokens = sourceHtml.replace(/<img\b[^>]*>/gi, (img) => {
+    idx += 1;
+    const token = `[[IMG_${idx}]]`;
+    tokensInOrder.push(token);
+    imageMap.set(token, img);
+    return `\n\n${token}\n\n`;
+  });
+  const textWithTokens = htmlToPlainText(htmlWithTokens);
+  const paras = splitParagraphs(textWithTokens);
+  const placeholders: ImagePlaceholder[] = [];
+  for (const token of tokensInOrder) {
+    const pIdx = Math.max(0, paras.findIndex((p) => p.includes(token)));
+    const html = imageMap.get(token);
+    if (!html) continue;
+    placeholders.push({ token, html, sourceParagraphIndex: pIdx });
+  }
+  return { placeholders, sourceParagraphCount: Math.max(1, paras.length) };
+}
+
+function mergeImageTokensIntoTranslatedText(
+  translatedText: string,
+  placeholders: ImagePlaceholder[],
+  sourceParagraphCount: number,
+): string {
+  const targetParas = splitParagraphs(translatedText);
+  if (targetParas.length === 0) {
+    return placeholders.map((p) => p.token).join("\n\n");
+  }
+  const out = targetParas.slice();
+  // Keep image order and place near corresponding paragraph ratio.
+  for (const ph of placeholders) {
+    if (out.some((p) => p.includes(ph.token))) continue;
+    const ratio = Math.min(1, Math.max(0, ph.sourceParagraphIndex / sourceParagraphCount));
+    let insertAt = Math.round(ratio * Math.max(0, out.length - 1));
+    insertAt = Math.min(out.length, Math.max(0, insertAt + 1));
+    out.splice(insertAt, 0, ph.token);
+  }
+  return out.join("\n\n");
+}
+
+function plainTextToHtmlWithImages(text: string, placeholders: ImagePlaceholder[]): string {
+  const imageMap = new Map(placeholders.map((p) => [p.token, p.html]));
+  const paras = splitParagraphs(text);
+  if (paras.length === 0) return "<p></p>";
+  return paras
+    .map((p) => {
+      const token = p.trim();
+      if (imageMap.has(token)) return imageMap.get(token) ?? "";
+      return `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`;
+    })
+    .join("");
+}
+
+function buildTranslatedHtmlPreserveImages(sourceHtml: string, translatedText: string): string {
+  const trimmed = translatedText.trim();
+  if (!trimmed) return sourceHtml || "<p></p>";
+  const { placeholders, sourceParagraphCount } = extractImagePlaceholdersWithPositions(sourceHtml);
+  if (placeholders.length === 0) {
+    return plainTextToHtml(trimmed);
+  }
+  const mergedText = mergeImageTokensIntoTranslatedText(
+    trimmed,
+    placeholders,
+    sourceParagraphCount,
+  );
+  return plainTextToHtmlWithImages(mergedText, placeholders);
+}
+
+function splitTranslatedTextByChapterWeights(
+  translatedText: string,
+  chapterWeights: number[],
+): string[] {
+  const chapterCount = chapterWeights.length;
+  if (chapterCount <= 0) return [];
+  if (chapterCount === 1) return [translatedText.trim()];
+
+  const paragraphs = splitPlainTextParagraphs(translatedText);
+  if (paragraphs.length === 0) return new Array(chapterCount).fill("");
+
+  const safeWeights = chapterWeights.map((w) => Math.max(1, Number.isFinite(w) ? w : 1));
+  const totalWeight = safeWeights.reduce((a, b) => a + b, 0);
+  const totalParas = paragraphs.length;
+
+  // 先按权重分配每章段落数，再做余数分配，保证总和等于 totalParas。
+  const rawCounts = safeWeights.map((w) => (w / totalWeight) * totalParas);
+  const baseCounts = rawCounts.map((x) => Math.floor(x));
+  let assigned = baseCounts.reduce((a, b) => a + b, 0);
+  const remainders = rawCounts
+    .map((x, idx) => ({ idx, rem: x - Math.floor(x) }))
+    .sort((a, b) => b.rem - a.rem);
+  for (let i = 0; assigned < totalParas && i < remainders.length; i += 1) {
+    baseCounts[remainders[i].idx] += 1;
+    assigned += 1;
+  }
+
+  // 段落不足时，尽量保证前几章至少有内容，剩余章可为空。
+  if (totalParas < chapterCount) {
+    for (let i = 0; i < chapterCount; i += 1) {
+      baseCounts[i] = i < totalParas ? 1 : 0;
+    }
+  }
+
+  const segments: string[] = [];
+  let cursor = 0;
+  for (let i = 0; i < chapterCount; i += 1) {
+    const count = baseCounts[i] ?? 0;
+    if (count <= 0) {
+      segments.push("");
+      continue;
+    }
+    const slice = paragraphs.slice(cursor, cursor + count);
+    segments.push(slice.join("\n\n").trim());
+    cursor += count;
+  }
+
+  // 尾部残余段落并入最后一章，避免丢失。
+  if (cursor < totalParas) {
+    const remain = paragraphs.slice(cursor).join("\n\n").trim();
+    const last = segments[segments.length - 1] ?? "";
+    segments[segments.length - 1] = last ? `${last}\n\n${remain}` : remain;
+  }
+  return segments;
+}
+
 async function backfillArticleIds(
   records: Array<{ filePath: string; data: PublishRecordLite }>,
 ) {
@@ -317,9 +487,7 @@ export async function GET(req: NextRequest) {
     const publicRecords = records.filter(
       (r) =>
         r.data.visibility === "public" &&
-        r.data.articleId &&
-        r.data.authorId &&
-        r.data.novelId,
+        r.data.articleId,
     );
     const groupedItems = await Promise.all(
       publicRecords.map(async (r) => {
@@ -439,7 +607,13 @@ export async function GET(req: NextRequest) {
     "structure",
     `${rec.data.authorId.toLowerCase()}_${safeDoc}.json`,
   );
-  let chapters: Array<{ id: string; title: string; contentHtml: string }> = [];
+  type ChapterOut = {
+    id: string;
+    title: string;
+    contentHtml: string;
+    contentMarkdown?: string;
+  };
+  let chapters: ChapterOut[] = [];
   try {
     const raw = await fs.readFile(structurePath, "utf8");
     const structure = JSON.parse(raw) as StructurePayload;
@@ -455,11 +629,18 @@ export async function GET(req: NextRequest) {
         typeof rawHtml === "string" && rawHtml.trim().length > 0
           ? rawHtml
           : "<p></p>";
-      return {
+      const rawMd = n.metadata?.chapterMarkdown;
+      const chapterMarkdown =
+        typeof rawMd === "string" && rawMd.trim().length > 0
+          ? rawMd
+          : undefined;
+      const out: ChapterOut = {
         id: n.id,
         title: n.title.trim() || "未命名章节",
         contentHtml: chapterHtml,
       };
+      if (chapterMarkdown) out.contentMarkdown = chapterMarkdown;
+      return out;
     });
   } catch {
     // no structure data, fallback below
@@ -527,38 +708,67 @@ export async function GET(req: NextRequest) {
     const langPayload = store?.languages?.[targetLang];
     if (langPayload) {
       const chapterMap = langPayload.chapters ?? {};
+      const hasChapterTranslations = Object.values(chapterMap).some(
+        (x) => typeof x?.translatedText === "string" && x.translatedText.trim().length > 0,
+      );
+      const fullBookTranslatedText =
+        (typeof langPayload.draftText === "string" && langPayload.draftText.trim()) ||
+        (typeof langPayload.manualText === "string" && langPayload.manualText.trim()) ||
+        "";
       const nextChapters: Array<{ id: string; title: string; contentHtml: string }> = [];
       let firstTranslatedPreview = "";
 
-      for (let idx = 0; idx < readableChapters.length; idx += 1) {
-        const chapter = readableChapters[idx];
-        let translated = chapterMap[chapter.id]?.translatedText?.trim() ?? "";
-
-        if (!translated && idx === 0 && typeof langPayload.draftText === "string") {
-          translated = langPayload.draftText.trim();
-        }
-
-        if (
-          !translated &&
-          idx === 0 &&
-          (!langPayload.draftText || !langPayload.draftText.trim()) &&
-          typeof langPayload.manualText === "string"
-        ) {
-          translated = langPayload.manualText.trim();
-        }
-
-        if (translated) {
-          if (!firstTranslatedPreview) firstTranslatedPreview = translated;
+      if (fullBookTranslatedText && !hasChapterTranslations) {
+        const chapterWeights = readableChapters.map((chapter) =>
+          Math.max(1, htmlToPlainText(chapter.contentHtml).length),
+        );
+        const splitTexts = splitTranslatedTextByChapterWeights(
+          fullBookTranslatedText,
+          chapterWeights,
+        );
+        for (let idx = 0; idx < readableChapters.length; idx += 1) {
+          const chapter = readableChapters[idx];
+          const translated = (splitTexts[idx] ?? "").trim();
+          if (translated && !firstTranslatedPreview) firstTranslatedPreview = translated;
           nextChapters.push({
             ...chapter,
-            contentHtml: plainTextToHtml(translated),
+            contentHtml: buildTranslatedHtmlPreserveImages(chapter.contentHtml, translated),
           });
-        } else {
-          nextChapters.push(chapter);
         }
-      }
+        responseChapters = nextChapters;
+      } else {
+        for (let idx = 0; idx < readableChapters.length; idx += 1) {
+          const chapter = readableChapters[idx];
+          let translated = chapterMap[chapter.id]?.translatedText?.trim() ?? "";
 
-      responseChapters = nextChapters;
+          if (!translated && idx === 0 && typeof langPayload.draftText === "string") {
+            translated = langPayload.draftText.trim();
+          }
+
+          if (
+            !translated &&
+            idx === 0 &&
+            (!langPayload.draftText || !langPayload.draftText.trim()) &&
+            typeof langPayload.manualText === "string"
+          ) {
+            translated = langPayload.manualText.trim();
+          }
+
+          if (translated) {
+            if (!firstTranslatedPreview) firstTranslatedPreview = translated;
+            nextChapters.push({
+              ...chapter,
+              contentHtml: buildTranslatedHtmlPreserveImages(
+                chapter.contentHtml,
+                translated,
+              ),
+            });
+          } else {
+            nextChapters.push(chapter);
+          }
+        }
+        responseChapters = nextChapters;
+      }
 
       if (typeof langPayload.draftText === "string" && langPayload.draftText.trim()) {
         responseSynopsis = langPayload.draftText.trim().slice(0, 280);
@@ -605,12 +815,23 @@ export async function GET(req: NextRequest) {
         : [],
       updatedAt,
       paymentMode,
+      firstLineIndent: rec.data.firstLineIndent === true,
       freePreviewChapters,
       unlocked,
       totalChapters: chapters.length,
       language: targetLang,
       languageLabel: languageLabel(targetLang),
-      chapters: responseChapters.map(({ title, contentHtml }) => ({ title, contentHtml })),
+      chapters: responseChapters.map(({ title, contentHtml, contentMarkdown }) => {
+        const row: {
+          title: string;
+          contentHtml: string;
+          contentMarkdown?: string;
+        } = { title, contentHtml };
+        if (typeof contentMarkdown === "string" && contentMarkdown.trim()) {
+          row.contentMarkdown = contentMarkdown;
+        }
+        return row;
+      }),
       paymentQrImageDataUrl,
     },
   });

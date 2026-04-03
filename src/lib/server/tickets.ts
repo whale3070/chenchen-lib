@@ -12,6 +12,7 @@ export type TicketRecord = {
   createdBy: string;
   title: string;
   content: string;
+  imageUrls: string[];
   status: TicketStatus;
   createdAt: string;
   updatedAt: string;
@@ -103,6 +104,13 @@ export async function listTickets(): Promise<TicketRecord[]> {
           createdBy: parsed.createdBy.toLowerCase(),
           title: parsed.title,
           content: parsed.content,
+          imageUrls: Array.isArray(parsed.imageUrls)
+            ? parsed.imageUrls
+                .filter((x): x is string => typeof x === "string")
+                .map((x) => x.trim())
+                .filter(Boolean)
+                .slice(0, 8)
+            : [],
           status: normalizeTicketStatus(parsed.status),
           createdAt: parsed.createdAt,
           updatedAt: parsed.updatedAt,
@@ -130,6 +138,7 @@ export async function createTicket(params: {
   createdBy: string;
   title: string;
   content: string;
+  imageUrls?: string[];
 }): Promise<TicketRecord> {
   const now = new Date().toISOString();
   const ticket: TicketRecord = {
@@ -137,6 +146,11 @@ export async function createTicket(params: {
     createdBy: params.createdBy.toLowerCase(),
     title: params.title.trim().slice(0, 120),
     content: params.content.trim().slice(0, 5000),
+    imageUrls: (params.imageUrls ?? [])
+      .filter((x): x is string => typeof x === "string")
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .slice(0, 8),
     status: "open",
     createdAt: now,
     updatedAt: now,
@@ -155,6 +169,13 @@ export async function readTicket(id: string): Promise<TicketRecord | null> {
     return {
       ...parsed,
       createdBy: parsed.createdBy.toLowerCase(),
+      imageUrls: Array.isArray(parsed.imageUrls)
+        ? parsed.imageUrls
+            .filter((x): x is string => typeof x === "string")
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .slice(0, 8)
+        : [],
       status: normalizeTicketStatus(parsed.status),
       closedBy: parsed.closedBy ? parsed.closedBy.toLowerCase() : null,
       adminNote: parsed.adminNote ?? "",
@@ -165,6 +186,7 @@ export async function readTicket(id: string): Promise<TicketRecord | null> {
         ? (e as NodeJS.ErrnoException).code
         : undefined;
     if (code === "ENOENT") return null;
+    if (e instanceof SyntaxError) return null;
     throw e;
   }
 }

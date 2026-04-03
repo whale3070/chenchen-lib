@@ -21,6 +21,21 @@ type PublishRecordLite = {
   publishedChapterIds?: string[];
 };
 
+type TranslationStoreLite = {
+  languages?: Record<
+    string,
+    {
+      chapters?: Record<
+        string,
+        {
+          translatedText?: string;
+          updatedAt?: string;
+        }
+      >;
+    }
+  >;
+};
+
 function unauthorized(message: string) {
   return NextResponse.json({ error: message }, { status: 401 });
 }
@@ -64,6 +79,15 @@ function publishPath(authorLower: string, novelId: string) {
     process.cwd(),
     ".data",
     "publish",
+    `${authorLower}_${safeNovelSegment(novelId)}.json`,
+  );
+}
+
+function translationStorePath(authorLower: string, novelId: string) {
+  return path.join(
+    process.cwd(),
+    ".data",
+    "translations",
     `${authorLower}_${safeNovelSegment(novelId)}.json`,
   );
 }
@@ -125,6 +149,7 @@ export async function GET(req: NextRequest) {
     title: string;
     preview: string;
     isPublished: boolean;
+    hasEnglishTranslation: boolean;
   }> = [];
 
   try {
@@ -132,6 +157,18 @@ export async function GET(req: NextRequest) {
     const structure = JSON.parse(raw) as StructurePayload;
     const chapterNodes = (structure.nodes ?? []).filter((n) => n.kind === "chapter");
     const publishRecord = await readPublishRecord(wh.walletLower, novelId);
+    let store: TranslationStoreLite | null = null;
+    try {
+      const sraw = await fs.readFile(translationStorePath(wh.walletLower, novelId), "utf8");
+      store = JSON.parse(sraw) as TranslationStoreLite;
+    } catch (e: unknown) {
+      const code =
+        e && typeof e === "object" && "code" in e
+          ? (e as NodeJS.ErrnoException).code
+          : undefined;
+      if (code !== "ENOENT") throw e;
+    }
+    const enChapters = store?.languages?.en?.chapters ?? {};
     const publishIds = new Set(publishRecord?.publishedChapterIds ?? []);
     const publishAll =
       publishRecord?.visibility === "public" && publishIds.size === 0;
@@ -149,6 +186,10 @@ export async function GET(req: NextRequest) {
           title: typeof n.title === "string" && n.title.trim() ? n.title.trim() : "未命名章节",
           preview: text.slice(0, 120),
           isPublished: publishAll || publishIds.has(id),
+          hasEnglishTranslation: Boolean(
+            typeof enChapters[id]?.translatedText === "string" &&
+              enChapters[id]?.translatedText?.trim(),
+          ),
         };
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x));

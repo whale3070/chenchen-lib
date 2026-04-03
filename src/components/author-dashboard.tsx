@@ -3,7 +3,7 @@
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { WalletConnect } from "@/components/wallet-connect";
@@ -67,6 +67,7 @@ type TicketItem = {
   createdBy: string;
   title: string;
   content: string;
+  imageUrls?: string[];
   status: "open" | "done" | "closed" | "ignored";
   createdAt: string;
   updatedAt: string;
@@ -201,11 +202,18 @@ export function AuthorDashboard() {
   const [translationSourceMode, setTranslationSourceMode] =
     useState<TranslationSourceMode>("chapter");
   const [translationChapters, setTranslationChapters] = useState<
-    Array<{ id: string; title: string; preview: string; isPublished: boolean }>
+    Array<{
+      id: string;
+      title: string;
+      preview: string;
+      isPublished: boolean;
+      hasEnglishTranslation: boolean;
+    }>
   >([]);
   const [translationHasDraft, setTranslationHasDraft] = useState(false);
   const [translationChapterId, setTranslationChapterId] = useState("");
   const [translationSourcePreview, setTranslationSourcePreview] = useState("");
+  const [translationSourceFullText, setTranslationSourceFullText] = useState("");
   const [translationManualText, setTranslationManualText] = useState("");
   const [translationTargetLanguage, setTranslationTargetLanguage] =
     useState("en");
@@ -230,6 +238,9 @@ export function AuthorDashboard() {
   const [ticketIsAdmin, setTicketIsAdmin] = useState(false);
   const [ticketTitle, setTicketTitle] = useState("");
   const [ticketContent, setTicketContent] = useState("");
+  const [ticketImages, setTicketImages] = useState<File[]>([]);
+  const [ticketImagePreviewUrls, setTicketImagePreviewUrls] = useState<string[]>([]);
+  const [ticketUploadingImages, setTicketUploadingImages] = useState(false);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
 
   const connectBootRef = useRef(false);
@@ -365,12 +376,16 @@ export function AuthorDashboard() {
             title: string;
             preview: string;
             isPublished: boolean;
+            hasEnglishTranslation?: boolean;
           }>;
           hasDraft?: boolean;
           error?: string;
         };
         if (!res.ok) throw new Error(data.error ?? "加载章节失败");
-        const chapters = data.chapters ?? [];
+        const chapters = (data.chapters ?? []).map((x) => ({
+          ...x,
+          hasEnglishTranslation: x.hasEnglishTranslation === true,
+        }));
         setTranslationChapters(chapters);
         setTranslationHasDraft(Boolean(data.hasDraft));
         const first = chapters[0];
@@ -824,25 +839,10 @@ export function AuthorDashboard() {
       setTranslationSourcePreview((data.sourceText ?? "").slice(0, 120));
       const sourceText = data.sourceText ?? "";
       const translatedText = data.translatedText ?? "";
+      setTranslationSourceFullText(sourceText);
       setTranslationOutputText(translatedText);
       setTranslationEngineModel(data.model ?? "");
       setTranslationProgress(100);
-      if (typeof window !== "undefined") {
-        const key = `${TRANSLATION_EDITOR_SESSION_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        window.sessionStorage.setItem(
-          key,
-          JSON.stringify({
-            novelId: translationNovelId,
-            sourceText,
-            translatedText,
-            targetLanguage: translationTargetLanguage,
-            createdAt: Date.now(),
-          }),
-        );
-        router.push(
-          `/editor/${encodeURIComponent(translationNovelId)}?translationPairKey=${encodeURIComponent(key)}`,
-        );
-      }
     } catch (e) {
       setTranslationError(e instanceof Error ? e.message : "翻译失败");
       setTranslationProgress(0);
@@ -851,6 +851,100 @@ export function AuthorDashboard() {
       setTranslationRunning(false);
     }
   };
+
+  const handleApplyTranslationToCurrentChapter = useCallback(() => {
+    if (!translationNovelId) {
+      setTranslationError("请先选择小说");
+      return;
+    }
+    const translatedText = translationOutputText.trim();
+    if (!translatedText) {
+      setTranslationError("请先生成或填写译文后再应用");
+      return;
+    }
+    const sourceText =
+      translationSourceFullText.trim() ||
+      (translationSourceMode === "manual" ? translationManualText.trim() : "");
+    if (typeof window === "undefined") return;
+    const key = `${TRANSLATION_EDITOR_SESSION_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    window.sessionStorage.setItem(
+      key,
+      JSON.stringify({
+        novelId: translationNovelId,
+        sourceText,
+        translatedText,
+        targetLanguage: translationTargetLanguage,
+        createdAt: Date.now(),
+      }),
+    );
+    router.push(
+      `/editor/${encodeURIComponent(translationNovelId)}?translationPairKey=${encodeURIComponent(key)}`,
+    );
+  }, [
+    router,
+    translationManualText,
+    translationNovelId,
+    translationOutputText,
+    translationSourceFullText,
+    translationSourceMode,
+    translationTargetLanguage,
+  ]);
+
+  const translationSelectedPublishRow = useMemo(
+    () => publishRows.find((row) => row.novelId === translationNovelId) ?? null,
+    [publishRows, translationNovelId],
+  );
+  const translationCompareArticleId =
+    translationSelectedPublishRow?.record?.articleId?.trim() ?? "";
+
+  useEffect(() => {
+    return () => {
+      for (const u of ticketImagePreviewUrls) {
+        URL.revokeObjectURL(u);
+      }
+    };
+  }, [ticketImagePreviewUrls]);
+
+  const handlePickTicketImages = (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    const incoming = Array.from(list).filter((f) => f.type.startsWith("image/"));
+    if (incoming.length === 0) return;
+    setTicketImages((prev) => {
+      const next = [...prev, ...incoming].slice(0, 8);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const urls = ticketImages.map((f) => URL.createObjectURL(f));
+    setTicketImagePreviewUrls(urls);
+    return () => {
+      for (const u of urls) URL.revokeObjectURL(u);
+    };
+  }, [ticketImages]);
+
+  const uploadTicketImages = useCallback(async (): Promise<string[]> => {
+    if (!address) return [];
+    if (ticketImages.length === 0) return [];
+    const form = new FormData();
+    for (const f of ticketImages) form.append("files", f);
+    const res = await fetch("/api/v1/image-host", {
+      method: "POST",
+      headers: {
+        "x-wallet-address": address,
+      },
+      body: form,
+    });
+    const data = (await res.json()) as {
+      items?: Array<{ url?: string }>;
+      error?: string;
+    };
+    if (!res.ok) throw new Error(data.error ?? "上传工单图片失败");
+    return (data.items ?? [])
+      .map((x) => (typeof x.url === "string" ? x.url : ""))
+      .filter(Boolean)
+      .slice(0, 8);
+  }, [address, ticketImages]);
 
   const handleCreateTicket = async () => {
     if (!address || ticketSubmitting) return;
@@ -867,22 +961,28 @@ export function AuthorDashboard() {
     setTicketSubmitting(true);
     setTicketsError(null);
     try {
+      setTicketUploadingImages(true);
+      const imageUrls = await uploadTicketImages();
+      setTicketUploadingImages(false);
       const res = await fetch("/api/v1/tickets", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-wallet-address": address,
         },
-        body: JSON.stringify({ title, content }),
+        body: JSON.stringify({ title, content, imageUrls }),
       });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? "提交工单失败");
       setTicketTitle("");
       setTicketContent("");
+      setTicketImages([]);
       await loadTickets();
     } catch (e) {
+      setTicketUploadingImages(false);
       setTicketsError(e instanceof Error ? e.message : "提交工单失败");
     } finally {
+      setTicketUploadingImages(false);
       setTicketSubmitting(false);
     }
   };
@@ -1355,9 +1455,65 @@ export function AuthorDashboard() {
                         <option key={chapter.id} value={chapter.id}>
                           {chapter.title}
                           {chapter.isPublished ? "（已发布）" : "（草稿章节）"}
+                          {chapter.hasEnglishTranslation ? " · 已有英文翻译" : ""}
                         </option>
                       ))}
                     </select>
+                    {translationChapters.length > 0 ? (
+                      <div className="mt-2 max-h-36 space-y-1.5 overflow-y-auto rounded-md border border-[#324866] bg-[#0d1625] p-2">
+                        {translationChapters.map((chapter) => (
+                          <div
+                            key={chapter.id}
+                            className="flex items-center justify-between gap-2 text-[11px]"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setTranslationChapterId(chapter.id)}
+                              className={
+                                chapter.id === translationChapterId
+                                  ? "truncate text-cyan-300"
+                                  : "truncate text-zinc-300 hover:text-cyan-300"
+                              }
+                              title={chapter.title}
+                            >
+                              {chapter.title}
+                            </button>
+                            {chapter.hasEnglishTranslation ? (
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                                  EN
+                                </span>
+                                {translationCompareArticleId ? (
+                                  <a
+                                    href={`/library/${encodeURIComponent(translationCompareArticleId)}?lang=en`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded border border-cyan-500/40 px-1.5 py-0.5 text-[10px] text-cyan-300 hover:bg-cyan-500/10"
+                                    title="打开英文阅读页（可与原文页对比）"
+                                  >
+                                    对比入口
+                                  </a>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {translationCompareArticleId ? (
+                      <p className="mt-1 text-[11px] text-zinc-500">
+                        对比建议：打开原文
+                        <a
+                          href={`/library/${encodeURIComponent(translationCompareArticleId)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mx-1 text-cyan-400 underline"
+                        >
+                          中文页
+                        </a>
+                        与英文页进行对照阅读。
+                      </p>
+                    ) : null}
                   </div>
                 )}
 
@@ -1447,9 +1603,17 @@ export function AuthorDashboard() {
                     placeholder="翻译完成后可在此预览和手动编辑"
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={handleApplyTranslationToCurrentChapter}
+                  disabled={!translationNovelId || !translationOutputText.trim()}
+                  className="w-full rounded-lg border border-emerald-400/60 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  应用译文到当前章节
+                </button>
                 {translationEngineModel ? (
                   <p className="text-[11px] text-zinc-500">
-                    DeepSeek 模型：{translationEngineModel}
+                    翻译模型：{translationEngineModel}
                   </p>
                 ) : null}
               </div>
@@ -1615,13 +1779,53 @@ export function AuthorDashboard() {
                     placeholder="请尽量写清楚使用场景和预期行为"
                   />
                 </div>
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-400">问题截图（可选，最多 8 张）</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => {
+                      handlePickTicketImages(e.target.files);
+                      e.currentTarget.value = "";
+                    }}
+                    className="w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-xs text-zinc-300 file:mr-3 file:rounded file:border-0 file:bg-cyan-500/20 file:px-2 file:py-1 file:text-cyan-200"
+                  />
+                  {ticketImagePreviewUrls.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {ticketImagePreviewUrls.map((url, idx) => (
+                        <div key={url} className="relative">
+                          <img
+                            src={url}
+                            alt={`工单截图 ${idx + 1}`}
+                            className="h-16 w-16 rounded border border-[#324866] object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTicketImages((prev) => prev.filter((_, i) => i !== idx))
+                            }
+                            className="absolute -right-1 -top-1 rounded-full border border-rose-400/60 bg-[#0d1625] px-1 text-[10px] text-rose-300"
+                            title="移除图片"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
                 <button
                   type="button"
                   onClick={() => void handleCreateTicket()}
-                  disabled={ticketSubmitting}
+                  disabled={ticketSubmitting || ticketUploadingImages}
                   className="rounded-lg border border-cyan-400/60 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {ticketSubmitting ? "提交中…" : "提交工单"}
+                  {ticketUploadingImages
+                    ? "上传图片中…"
+                    : ticketSubmitting
+                      ? "提交中…"
+                      : "提交工单"}
                 </button>
               </section>
 
@@ -1630,14 +1834,22 @@ export function AuthorDashboard() {
                   <h3 className="text-sm font-semibold text-zinc-100">
                     {ticketIsAdmin ? "全部工单" : "我的工单"}
                   </h3>
-                  <button
-                    type="button"
-                    onClick={() => void loadTickets()}
-                    disabled={ticketsLoading}
-                    className="rounded border border-[#324866] px-2.5 py-1 text-xs text-zinc-300 hover:bg-[#0d1625] disabled:opacity-50"
-                  >
-                    刷新
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <Link
+                      href="/workspace/tickets"
+                      className="rounded border border-cyan-500/40 px-2.5 py-1 text-xs text-cyan-300 hover:bg-cyan-500/10"
+                    >
+                      打开全部工单页面
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void loadTickets()}
+                      disabled={ticketsLoading}
+                      className="rounded border border-[#324866] px-2.5 py-1 text-xs text-zinc-300 hover:bg-[#0d1625] disabled:opacity-50"
+                    >
+                      刷新
+                    </button>
+                  </div>
                 </div>
                 {ticketsError ? (
                   <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
@@ -1666,6 +1878,25 @@ export function AuthorDashboard() {
                         <p className="line-clamp-3 text-xs leading-relaxed text-zinc-400">
                           {ticket.content}
                         </p>
+                        {ticket.imageUrls && ticket.imageUrls.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {ticket.imageUrls.map((url) => (
+                              <a
+                                key={url}
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-block"
+                              >
+                                <img
+                                  src={url}
+                                  alt="工单截图"
+                                  className="h-16 w-16 rounded border border-[#324866] object-cover"
+                                />
+                              </a>
+                            ))}
+                          </div>
+                        ) : null}
                         <p className="mt-1 text-[10px] text-zinc-500">
                           {ticket.createdBy} · {formatModified(ticket.createdAt)}
                         </p>

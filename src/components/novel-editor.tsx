@@ -40,6 +40,7 @@ import {
   type NovelPublishRecord,
 } from "@/lib/novel-publish";
 import { plainTextToTipTapHtml } from "@/lib/manuscript-txt";
+import { resolveParentForNewChapter } from "@/lib/plot-outline";
 import { createEmptyPersona } from "@/lib/persona-factory";
 import {
   applySelectionToEditor,
@@ -60,6 +61,17 @@ export type NovelEditorWorkspaceProps = {
   /** 与 save-draft / 大纲 / 角色存档绑定的作品 ID */
   novelId: string;
 };
+
+const AI_REFLOW_BACKGROUND_MSG =
+  "AI 正在后台排版，请耐心等待。排版完成后会再次提示您。此期间可继续编辑；请勿中断服务器进程。";
+
+/** 让发布弹窗先结束 submitting / 关掉弹窗，再弹出系统提示；并立刻开始轮询排版状态 */
+function scheduleAiReflowBackgroundNotify(startWatch: () => void) {
+  startWatch();
+  window.setTimeout(() => {
+    window.alert(AI_REFLOW_BACKGROUND_MSG);
+  }, 0);
+}
 
 function decodeTxtAuto(bytes: Uint8Array): string {
   if (bytes.length === 0) return "";
@@ -117,6 +129,49 @@ const CHAPTER_CN_TO_NUM: Record<string, number> = {
 const MARKDOWN_EDITOR_POPUP_MESSAGE_TYPE = "chenchen:markdown-editor-publish";
 const TRANSLATION_EDITOR_SESSION_PREFIX = "translation-editor-pair:";
 type ChapterizeMode = "auto" | "rule" | "llm";
+const WORKSPACE_RESUME_PREFIX = "chenchen:workspace:resume:";
+type ManageTab = "personas" | "outline" | "finance";
+type WorkspaceResumeState = {
+  activeChapterId?: string | null;
+  manageTab?: ManageTab;
+  updatedAt: number;
+};
+
+function workspaceResumeKey(authorId: string, docId: string): string {
+  return `${WORKSPACE_RESUME_PREFIX}${authorId.toLowerCase()}:${docId}`;
+}
+
+function readWorkspaceResumeState(
+  authorId: string,
+  docId: string,
+): WorkspaceResumeState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(workspaceResumeKey(authorId, docId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WorkspaceResumeState;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeWorkspaceResumeState(
+  authorId: string,
+  docId: string,
+  payload: WorkspaceResumeState,
+) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      workspaceResumeKey(authorId, docId),
+      JSON.stringify(payload),
+    );
+  } catch {
+    // ignore private mode / quota
+  }
+}
 
 function parseChapterNoFromTitle(title: string): number | null {
   const t = title.trim();
@@ -177,6 +232,14 @@ function chapterHtmlFromNode(node: PlotNode | undefined): string | null {
   return html.length > 0 ? html : null;
 }
 
+/** 从 Markdown 弹窗保存的原文；与 chapterHtml 同步维护 */
+function chapterMarkdownFromNode(node: PlotNode | undefined): string | null {
+  if (!node?.metadata || typeof node.metadata !== "object") return null;
+  const raw = (node.metadata as Record<string, unknown>).chapterMarkdown;
+  if (typeof raw !== "string") return null;
+  return raw.trim().length > 0 ? raw : null;
+}
+
 function htmlToMarkdownSeed(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, "\n")
@@ -193,6 +256,77 @@ function htmlToMarkdownSeed(html: string): string {
     .trim();
 }
 
+/**
+ * marked 生成的表格是 thead/tbody + 单元格内直接文本；TipTap TableCell/Header 要求 block+（通常需 p）。
+ * 不处理时 setContent 会丢掉整表。此处展平 tr 到 table 下，并把裸内容包进 p。
+ */
+function normalizeMarkedHtmlForTipTap(html: string): string {
+  if (typeof window === "undefined" || typeof DOMParser === "undefined") {
+    return html;
+  }
+  try {
+    const doc = new DOMParser().parseFromString(
+      `<div data-tip-tap-md="1">${html}</div>`,
+      "text/html",
+    );
+    const root = doc.querySelector("[data-tip-tap-md]");
+    if (!root) return html;
+
+    root.querySelectorAll("table").forEach((table) => {
+      const directRows: HTMLTableRowElement[] = [];
+      for (const child of Array.from(table.children)) {
+        const tag = child.tagName;
+        if (tag === "THEAD" || tag === "TBODY" || tag === "TFOOT") {
+          for (const tr of Array.from(child.children)) {
+            if (tr.tagName === "TR") {
+              directRows.push(tr as HTMLTableRowElement);
+            }
+          }
+        } else if (tag === "TR") {
+          directRows.push(child as HTMLTableRowElement);
+        }
+      }
+      for (const tr of directRows) {
+        table.appendChild(tr);
+      }
+      table.querySelectorAll("thead, tbody, tfoot").forEach((s) => {
+        s.remove();
+      });
+    });
+
+    const blockTags = new Set([
+      "P",
+      "DIV",
+      "H1",
+      "H2",
+      "H3",
+      "H4",
+      "H5",
+      "H6",
+      "UL",
+      "OL",
+      "BLOCKQUOTE",
+      "PRE",
+      "TABLE",
+    ]);
+    root.querySelectorAll("th, td").forEach((cell) => {
+      const hasBlock = Array.from(cell.children).some((el) =>
+        blockTags.has(el.tagName),
+      );
+      if (hasBlock) return;
+      if (cell.childNodes.length === 0) {
+        cell.innerHTML = "<p></p>";
+        return;
+      }
+      cell.innerHTML = `<p>${cell.innerHTML}</p>`;
+    });
+
+    return root.innerHTML;
+  } catch {
+    return html;
+  }
+}
+
 function escapeInlineScriptPayload(value: string): string {
   return value
     .replace(/<\/script/gi, "<\\/script")
@@ -200,15 +334,20 @@ function escapeInlineScriptPayload(value: string): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
-function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
-  const escaped = escapeInlineScriptPayload(JSON.stringify(initialMarkdown));
+function buildMarkdownEditorWindowHtml(
+  initialMarkdown: string,
+  sessionToken: string,
+  authorId: string,
+): string {
+  const escapedMd = escapeInlineScriptPayload(JSON.stringify(initialMarkdown));
+  const escapedToken = escapeInlineScriptPayload(JSON.stringify(sessionToken));
+  const escapedAuthor = escapeInlineScriptPayload(JSON.stringify(authorId));
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Markdown 编辑器（支持表格）</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <style>
       :root {
         color-scheme: dark;
@@ -264,13 +403,25 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
       .apply:hover {
         background: rgba(16, 185, 129, 0.1);
       }
+      .insert-table {
+        border-color: rgba(168, 85, 247, 0.45);
+        color: #e9d5ff;
+      }
+      .insert-table:hover {
+        border-color: #c084fc;
+        color: #f5e1ff;
+        background: rgba(168, 85, 247, 0.12);
+      }
       .content {
         display: grid;
+        width: 100%;
         min-height: 0;
         flex: 1;
-        grid-template-columns: 1fr 1fr;
+        /* minmax(0,1fr) 避免右侧预览里宽表格/长行把 min-content 撑满，挤扁左栏 */
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       }
       .pane {
+        min-width: 0;
         min-height: 0;
         padding: 12px;
       }
@@ -301,15 +452,24 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
       }
       .preview {
         height: calc(100vh - 96px);
+        max-width: 100%;
         overflow: auto;
+        overflow-wrap: break-word;
+        word-break: break-word;
         border: 1px solid #26364d;
         border-radius: 8px;
         padding: 12px;
         background: #0b1320;
       }
+      .preview pre,
+      .preview code {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
       table {
         border-collapse: collapse;
         width: 100%;
+        max-width: 100%;
       }
       th, td {
         border: 1px solid #334155;
@@ -325,6 +485,14 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
       <header class="toolbar">
         <div class="title">Markdown 编辑器（支持表格）</div>
         <div class="actions">
+          <button
+            id="insert-table-btn"
+            class="insert-table"
+            type="button"
+            title="在光标处插入 Markdown 表格模板（快捷键 Ctrl+Shift+G 或 ⌘+Shift+G）"
+          >
+            生成表格
+          </button>
           <button id="cancel-btn" type="button">取消</button>
           <button id="apply-btn" class="apply" type="button">发布本章节</button>
         </div>
@@ -332,7 +500,7 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
       <main class="content">
         <section class="pane">
           <div class="label">Markdown 输入（支持表格：\`| 列1 | 列2 |\`）</div>
-          <textarea id="markdown-input" placeholder="在这里输入 Markdown..."></textarea>
+          <textarea id="markdown-input" placeholder="在这里输入 Markdown…（可 Ctrl+V 粘贴截图自动上传）"></textarea>
         </section>
         <section class="pane">
           <div class="label">实时预览</div>
@@ -341,49 +509,238 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
       </main>
     </div>
     <script>
-      const initialMarkdown = ${escaped};
-      const input = document.getElementById("markdown-input");
-      const preview = document.getElementById("markdown-preview");
-      const cancelBtn = document.getElementById("cancel-btn");
-      const applyBtn = document.getElementById("apply-btn");
-      input.value = initialMarkdown || "";
-
-      const renderPreview = async () => {
-        const md = input.value || "";
-        if (window.marked && typeof window.marked.setOptions === "function") {
-          window.marked.setOptions({ breaks: true, gfm: true });
-        }
-        const parser = window.marked && typeof window.marked.parse === "function"
-          ? (txt) => window.marked.parse(txt)
-          : (txt) => txt.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\\n/g, "<br>");
-        const maybeRendered = parser(md);
-        const rendered = maybeRendered && typeof maybeRendered.then === "function"
-          ? await maybeRendered
-          : maybeRendered;
-        preview.innerHTML = typeof rendered === "string" ? rendered : "";
+      window.__MD_SESSION__ = {
+        initialMarkdown: ${escapedMd},
+        token: ${escapedToken},
+        authorId: ${escapedAuthor},
       };
-
-      input.addEventListener("input", () => {
-        void renderPreview();
-      });
-      cancelBtn.addEventListener("click", () => window.close());
-      applyBtn.addEventListener("click", () => {
-        if (window.opener) {
-          window.opener.postMessage(
-            {
-              type: "${MARKDOWN_EDITOR_POPUP_MESSAGE_TYPE}",
-              markdown: input.value || "",
-              renderedHtml: preview.innerHTML || "",
-            },
-            window.location.origin,
-          );
+      window.__startMarkdownEditor = function () {
+        var boot = window.__MD_SESSION__ || {};
+        var input = document.getElementById("markdown-input");
+        var preview = document.getElementById("markdown-preview");
+        var cancelBtn = document.getElementById("cancel-btn");
+        var applyBtn = document.getElementById("apply-btn");
+        var insertTableBtn = document.getElementById("insert-table-btn");
+        if (!input || !preview || !cancelBtn || !applyBtn || !insertTableBtn) {
+          return;
         }
-        window.close();
-      });
+        input.value = boot.initialMarkdown || "";
 
-      void renderPreview();
-      input.focus();
+        var buildMarkdownTable = function (cols, dataRows) {
+          var c = Math.min(50, Math.max(1, Math.floor(cols)));
+          var r = Math.min(100, Math.max(1, Math.floor(dataRows)));
+          var rowLine = function () {
+            var cells = [];
+            for (var i = 0; i < c; i++) cells.push(" ");
+            return "| " + cells.join(" | ") + " |";
+          };
+          var sepLine = function () {
+            var cells = [];
+            for (var i = 0; i < c; i++) cells.push("---");
+            return "| " + cells.join(" | ") + " |";
+          };
+          var lines = [rowLine(), sepLine()];
+          for (var j = 0; j < r; j++) lines.push(rowLine());
+          return lines.join("\\n");
+        };
+
+        var insertTableAtCursor = function () {
+          var colStr = window.prompt("请输入列数（1–50）", "3");
+          if (colStr === null) return;
+          var rowStr = window.prompt(
+            "请输入数据行数（不含表头分隔行，1–100）",
+            "3",
+          );
+          if (rowStr === null) return;
+          var cols = parseInt(colStr, 10);
+          var dataRows = parseInt(rowStr, 10);
+          if (!Number.isFinite(cols) || !Number.isFinite(dataRows)) {
+            window.alert("请输入有效数字。");
+            return;
+          }
+          var tableMd = buildMarkdownTable(cols, dataRows);
+          var start = input.selectionStart;
+          var end = input.selectionEnd;
+          var text = input.value;
+          var before = text.slice(0, start);
+          var after = text.slice(end);
+          var padBefore = "";
+          if (before.length > 0) {
+            padBefore = before.endsWith("\\n\\n")
+              ? ""
+              : before.endsWith("\\n")
+                ? "\\n"
+                : "\\n\\n";
+          }
+          var padAfter = "";
+          if (after.length > 0) {
+            padAfter = after.startsWith("\\n\\n")
+              ? ""
+              : after.startsWith("\\n")
+                ? "\\n"
+                : "\\n\\n";
+          }
+          var toInsert = padBefore + tableMd + padAfter;
+          input.value = before + toInsert + after;
+          var caret = start + toInsert.length;
+          input.selectionStart = caret;
+          input.selectionEnd = caret;
+          input.focus();
+          void renderPreview();
+        };
+
+        insertTableBtn.addEventListener("click", function () {
+          insertTableAtCursor();
+        });
+        input.addEventListener("keydown", function (e) {
+          var mod = e.ctrlKey || e.metaKey;
+          if (mod && e.shiftKey && (e.key === "g" || e.key === "G")) {
+            e.preventDefault();
+            insertTableAtCursor();
+          }
+        });
+
+        input.addEventListener("paste", function (e) {
+          var aid = boot.authorId;
+          if (!aid || typeof aid !== "string") return;
+          var dt = e.clipboardData;
+          if (!dt) return;
+          var imageFiles = [];
+          for (var i = 0; i < dt.items.length; i++) {
+            var it = dt.items[i];
+            if (it.kind === "file" && it.type.indexOf("image/") === 0) {
+              var f = it.getAsFile();
+              if (f) imageFiles.push(f);
+            }
+          }
+          if (imageFiles.length === 0) return;
+          e.preventDefault();
+          var form = new FormData();
+          for (var k = 0; k < imageFiles.length; k++) {
+            form.append("files", imageFiles[k]);
+          }
+          fetch("/api/v1/image-host", {
+            method: "POST",
+            headers: { "x-wallet-address": aid },
+            body: form,
+          })
+            .then(function (r) {
+              return r.json().then(function (data) {
+                return { r: r, data: data };
+              });
+            })
+            .then(function (ref) {
+              var r = ref.r;
+              var data = ref.data;
+              if (!r.ok || !data.items || !Array.isArray(data.items)) {
+                throw new Error((data && data.error) || "图片上传失败");
+              }
+              var lines = data.items.map(function (item) {
+                var name = String((item && item.name) || "image")
+                  .split("[")
+                  .join("")
+                  .split("]")
+                  .join("");
+                return "![" + name + "](" + String(item.url) + ")";
+              });
+              var md = lines.join("\\n\\n");
+              var start = input.selectionStart;
+              var end = input.selectionEnd;
+              var text = input.value;
+              var before = text.slice(0, start);
+              var after = text.slice(end);
+              var pb = "";
+              if (before.length > 0) {
+                pb = before.endsWith("\\n\\n")
+                  ? ""
+                  : before.endsWith("\\n")
+                    ? "\\n"
+                    : "\\n\\n";
+              }
+              var pa = "";
+              if (after.length > 0) {
+                pa = after.startsWith("\\n\\n")
+                  ? ""
+                  : after.startsWith("\\n")
+                    ? "\\n"
+                    : "\\n\\n";
+              }
+              var ins = pb + md + pa;
+              input.value = before + ins + after;
+              var caret = start + ins.length;
+              input.selectionStart = caret;
+              input.selectionEnd = caret;
+              input.focus();
+              void renderPreview();
+            })
+            .catch(function (err) {
+              window.alert(
+                err && err.message ? err.message : "粘贴截图上传失败",
+              );
+            });
+        });
+
+        var renderPreview = async function () {
+          var md = input.value || "";
+          if (window.marked && typeof window.marked.setOptions === "function") {
+            window.marked.setOptions({ breaks: true, gfm: true });
+          }
+          var parser =
+            window.marked && typeof window.marked.parse === "function"
+              ? function (txt) {
+                  return window.marked.parse(txt);
+                }
+              : function (txt) {
+                  return txt
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/\\n/g, "<br>");
+                };
+          var maybeRendered = parser(md);
+          var rendered =
+            maybeRendered && typeof maybeRendered.then === "function"
+              ? await maybeRendered
+              : maybeRendered;
+          preview.innerHTML = typeof rendered === "string" ? rendered : "";
+        };
+
+        input.addEventListener("input", function () {
+          void renderPreview();
+        });
+        cancelBtn.addEventListener("click", function () {
+          window.close();
+        });
+        applyBtn.addEventListener("click", function () {
+          var targetOrigin = "*";
+          try {
+            if (window.opener && window.opener.location && window.opener.location.origin) {
+              targetOrigin = window.opener.location.origin;
+            }
+          } catch (e) {}
+          if (window.opener) {
+            window.opener.postMessage(
+              {
+                type: "${MARKDOWN_EDITOR_POPUP_MESSAGE_TYPE}",
+                token: boot.token,
+                markdown: input.value || "",
+                renderedHtml: preview.innerHTML || "",
+              },
+              targetOrigin,
+            );
+          }
+          window.close();
+        });
+
+        void renderPreview();
+        input.focus();
+      };
     </script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
+      onload="typeof window.__startMarkdownEditor==='function'&&window.__startMarkdownEditor()"
+      onerror="window.alert('Markdown 预览库加载失败，请检查网络或是否拦截了 cdn.jsdelivr.net')"
+    ></script>
   </body>
 </html>`;
 }
@@ -391,8 +748,10 @@ function buildMarkdownEditorWindowHtml(initialMarkdown: string): string {
 function upsertChapterHtml(nodes: PlotNode[], chapterId: string, html: string): PlotNode[] {
   return nodes.map((n) => {
     if (n.id !== chapterId) return n;
+    const prev = { ...(n.metadata ?? {}) } as Record<string, unknown>;
+    delete prev.chapterMarkdown;
     const metadata = {
-      ...(n.metadata ?? {}),
+      ...prev,
       // Keep all publish variants in sync to avoid reader seeing stale desktop/mobile HTML.
       chapterHtml: html,
       chapterHtmlDesktop: html,
@@ -402,12 +761,95 @@ function upsertChapterHtml(nodes: PlotNode[], chapterId: string, html: string): 
   });
 }
 
+function upsertChapterMarkdownAndHtml(
+  nodes: PlotNode[],
+  chapterId: string,
+  markdown: string,
+  html: string,
+): PlotNode[] {
+  return nodes.map((n) => {
+    if (n.id !== chapterId) return n;
+    const metadata = {
+      ...(n.metadata ?? {}),
+      chapterMarkdown: markdown,
+      chapterHtml: html,
+      chapterHtmlDesktop: html,
+      chapterHtmlMobile: html,
+    };
+    return { ...n, metadata };
+  });
+}
+
+function hashText(input: string): string {
+  let h1 = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    h1 ^= input.charCodeAt(i);
+    h1 = Math.imul(h1, 0x01000193);
+  }
+  return (h1 >>> 0).toString(16);
+}
+
+/** 与发布快照比对用：Markdown 与 HTML 任一变更即视为正文变更 */
+const PUBLISHED_CONTENT_FINGERPRINT_KEY = "publishedContentFingerprint";
+
+function chapterBodyFingerprintForCompare(
+  node: PlotNode,
+  liveHtml?: string | null,
+): string {
+  const md = chapterMarkdownFromNode(node) ?? "";
+  const html =
+    liveHtml !== undefined && liveHtml !== null
+      ? liveHtml
+      : chapterHtmlFromNode(node) ?? "";
+  return hashText(`${md}\x1e${html}`);
+}
+
+function readPublishedContentFingerprint(node: PlotNode): string | undefined {
+  const raw = (node.metadata as Record<string, unknown> | undefined)?.[
+    PUBLISHED_CONTENT_FINGERPRINT_KEY
+  ];
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
+
+function patchChapterPublishFingerprintInNodes(
+  nodes: PlotNode[],
+  chapterId: string,
+  publish: boolean,
+): PlotNode[] {
+  return nodes.map((n) => {
+    if (n.id !== chapterId || n.kind !== "chapter") return n;
+    const meta = { ...(n.metadata ?? {}) } as Record<string, unknown>;
+    if (!publish) {
+      delete meta[PUBLISHED_CONTENT_FINGERPRINT_KEY];
+      return { ...n, metadata: meta };
+    }
+    meta[PUBLISHED_CONTENT_FINGERPRINT_KEY] = chapterBodyFingerprintForCompare(n);
+    return { ...n, metadata: meta };
+  });
+}
+
+function patchAllListedChaptersPublishFingerprint(
+  nodes: PlotNode[],
+  publishedIds: string[],
+): PlotNode[] {
+  const set = new Set(publishedIds);
+  return nodes.map((n) => {
+    if (n.kind !== "chapter" || !set.has(n.id)) return n;
+    const meta = { ...(n.metadata ?? {}) } as Record<string, unknown>;
+    meta[PUBLISHED_CONTENT_FINGERPRINT_KEY] = chapterBodyFingerprintForCompare(n);
+    return { ...n, metadata: meta };
+  });
+}
+
 export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const searchParams = useSearchParams();
-  const [manageTab, setManageTab] = useState<"personas" | "outline" | "finance">(
-    "personas",
-  );
+  const [manageTab, setManageTab] = useState<ManageTab>("outline");
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
+  const activeChapterIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeChapterIdRef.current = activeChapterId;
+  }, [activeChapterId]);
+  const [resumeStateLoaded, setResumeStateLoaded] = useState(false);
   const [novelTitleForHeader, setNovelTitleForHeader] = useState<string | null>(
     null,
   );
@@ -420,6 +862,34 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const [outlineNodes, setOutlineNodes] = useState<PlotNode[]>(() =>
     createDefaultChapterOneNodes(),
   );
+  /** 已登录时：仅在大纲 GET 成功并写入 nodes 后（或确认服务端无结构并种子化）为 true，避免占位单章被 POST 覆盖服务端 */
+  const [outlineStructureReady, setOutlineStructureReady] = useState(false);
+  const outlineStructureReadyRef = useRef(false);
+  useEffect(() => {
+    outlineStructureReadyRef.current = outlineStructureReady;
+  }, [outlineStructureReady]);
+  const outlineFetchGenRef = useRef(0);
+  const outlineNodesRef = useRef<PlotNode[]>([]);
+  useEffect(() => {
+    outlineNodesRef.current = outlineNodes;
+  }, [outlineNodes]);
+  /** 每个作品下「当前章节」已从大纲灌入编辑器一次（切章或 novelId 变化时重置） */
+  const lastEditorOutlineHydrationKeyRef = useRef<string>("");
+
+  /** 无 metadata 指纹的旧数据：会话内用首次见到的正文哈希作基线，避免一打开就显示「更新修改」 */
+  const publishBaselineSessionRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    publishBaselineSessionRef.current = {};
+  }, [novelId]);
+
+  useEffect(() => {
+    lastEditorOutlineHydrationKeyRef.current = "";
+  }, [novelId]);
+
+  const setActiveChapterIdSafe = useCallback((id: string | null) => {
+    activeChapterIdRef.current = id;
+    setActiveChapterId(id);
+  }, []);
 
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -436,7 +906,9 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const [paymentQrLoading, setPaymentQrLoading] = useState(false);
   const [paymentQrSaving, setPaymentQrSaving] = useState(false);
   const [chapterPublishSubmitting, setChapterPublishSubmitting] = useState(false);
+  const [firstLineIndentEnabled, setFirstLineIndentEnabled] = useState(false);
   const markdownEditorPopupRef = useRef<Window | null>(null);
+  const markdownEditorSessionTokenRef = useRef<string | null>(null);
   const editorInstanceRef = useRef<Editor | null>(null);
   const [chapterEditTab, setChapterEditTab] = useState<"read" | "edit">("edit");
 
@@ -514,6 +986,31 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   useEffect(() => {
     if (!authorId) draftLoadedKeyRef.current = null;
   }, [authorId]);
+
+  useEffect(() => {
+    if (!authorId || !novelId) {
+      setResumeStateLoaded(true);
+      return;
+    }
+    setResumeStateLoaded(false);
+    const saved = readWorkspaceResumeState(authorId, novelId);
+    if (saved?.manageTab && ["personas", "outline", "finance"].includes(saved.manageTab)) {
+      setManageTab(saved.manageTab);
+    }
+    if (typeof saved?.activeChapterId === "string" && saved.activeChapterId.trim()) {
+      setActiveChapterIdSafe(saved.activeChapterId.trim());
+    }
+    setResumeStateLoaded(true);
+  }, [authorId, novelId, setActiveChapterIdSafe]);
+
+  useEffect(() => {
+    if (!authorId || !novelId || !resumeStateLoaded) return;
+    writeWorkspaceResumeState(authorId, novelId, {
+      activeChapterId,
+      manageTab,
+      updatedAt: Date.now(),
+    });
+  }, [authorId, novelId, activeChapterId, manageTab, resumeStateLoaded]);
 
   useEffect(() => {
     const pairKey = searchParams.get("translationPairKey");
@@ -612,6 +1109,10 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     return () => ac.abort();
   }, [authorId, novelId]);
 
+  useEffect(() => {
+    setFirstLineIndentEnabled(publishRecord?.firstLineIndent === true);
+  }, [publishRecord?.firstLineIndent, novelId]);
+
   const primaryVolumeForPublish = useMemo(
     () => getPrimaryVolumeForPublish(outlineNodes),
     [outlineNodes],
@@ -628,6 +1129,54 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     () => new Set(publishRecord?.publishedChapterIds ?? []),
     [publishRecord],
   );
+
+  const aiReflowWatchSeqRef = useRef(0);
+
+  const watchAiReflowCompletion = useCallback(() => {
+    if (!authorId || !novelId) return;
+    const seq = (aiReflowWatchSeqRef.current += 1);
+    const started = Date.now();
+    const maxMs = 20 * 60 * 1000;
+
+    const poll = async () => {
+      if (seq !== aiReflowWatchSeqRef.current) return;
+      try {
+        const r = await fetch(
+          `/api/v1/novel-publish?authorId=${encodeURIComponent(authorId)}&novelId=${encodeURIComponent(novelId)}`,
+          { headers: { "x-wallet-address": authorId }, cache: "no-store" },
+        );
+        if (!r.ok) throw new Error("poll failed");
+        const data = (await r.json()) as { record?: NovelPublishRecord | null };
+        const rec = data.record ?? null;
+        if (seq !== aiReflowWatchSeqRef.current) return;
+
+        const st = rec?.aiReflowStatus;
+        if (st === "done") {
+          window.alert("AI 排版已完成。");
+          setPublishRecord(rec);
+          return;
+        }
+        if (st === "error") {
+          window.alert(
+            `AI 排版失败：${(rec?.aiReflowError && rec.aiReflowError.trim()) || "未知错误"}`,
+          );
+          setPublishRecord(rec);
+          return;
+        }
+        if (Date.now() - started > maxMs) {
+          window.alert("AI 排版等待超时，请稍后刷新页面查看状态。");
+          if (rec) setPublishRecord(rec);
+          return;
+        }
+        window.setTimeout(() => void poll(), 2500);
+      } catch {
+        if (seq !== aiReflowWatchSeqRef.current) return;
+        if (Date.now() - started > maxMs) return;
+        window.setTimeout(() => void poll(), 4000);
+      }
+    };
+    window.setTimeout(() => void poll(), 800);
+  }, [authorId, novelId]);
 
   const canWithdrawPublish =
     publishRecord?.visibility === "public" &&
@@ -659,31 +1208,94 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       };
       if (!r.ok) throw new Error(data.error ?? "撤回失败");
       setPublishRecord(data.record ?? null);
+      publishBaselineSessionRef.current = {};
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "撤回失败");
     }
   }, [authorId, novelId]);
 
-  const postOutlineStructure = useCallback(async (nodes: PlotNode[]) => {
-    const aid = authorIdRef.current;
-    if (!aid) return;
-    try {
-      await fetch("/api/v1/update-structure", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          authorId: aid,
-          docId: novelIdRef.current,
-          nodes,
-        }),
-      });
-    } catch {
-      /* ignore */
-    }
+  const UPDATE_STRUCTURE_POST_TIMEOUT_MS = 10_000;
+  const SAVE_DRAFT_POST_TIMEOUT_MS = 10_000;
+  const PUBLISH_SUBMIT_TIMEOUT_MS = 15_000;
+
+  const postOutlineStructure = useCallback(
+    async (
+      nodes: PlotNode[],
+      options?: { mode?: "chapter_patch" | "full"; chapterId?: string | null },
+    ) => {
+      const aid = authorIdRef.current;
+      if (!aid) return;
+      if (!outlineStructureReadyRef.current) return;
+      const mode = options?.mode ?? "chapter_patch";
+      const patchChapterId = options?.chapterId ?? activeChapterIdRef.current;
+      const chapterNode =
+        patchChapterId && mode === "chapter_patch"
+          ? nodes.find((n) => n.id === patchChapterId && n.kind === "chapter")
+          : undefined;
+      const payload =
+        mode === "chapter_patch" && chapterNode
+          ? {
+              authorId: aid,
+              docId: novelIdRef.current,
+              chapterId: chapterNode.id,
+              chapterNode,
+            }
+          : {
+              authorId: aid,
+              docId: novelIdRef.current,
+              nodes,
+            };
+      const ac = new AbortController();
+      const timeoutId = window.setTimeout(() => ac.abort(), UPDATE_STRUCTURE_POST_TIMEOUT_MS);
+      try {
+        const r = await fetch("/api/v1/update-structure", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ac.signal,
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+          throw new Error(`update-structure failed: ${r.status}`);
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    },
+    [],
+  );
+
+  const snapshotNodesWithActiveChapter = useCallback((): PlotNode[] => {
+    const chapterId = activeChapterIdRef.current;
+    const ed = editorInstanceRef.current;
+    const nodes = outlineNodesRef.current;
+    if (!chapterId || !ed || ed.isDestroyed) return nodes;
+    return upsertChapterHtml(nodes, chapterId, ed.getHTML());
+  }, []);
+
+  const chapterHashById = useCallback((nodes: PlotNode[], chapterId: string): string | null => {
+    const node = nodes.find((n) => n.id === chapterId);
+    if (!node) return null;
+    const html = chapterHtmlFromNode(node) ?? "";
+    return hashText(html);
   }, []);
 
   const persistActiveChapterBeforePublish = useCallback(async (): Promise<PlotNode[]> => {
     const ed = editorInstanceRef.current;
+    const ready = outlineStructureReadyRef.current;
+    if (!ready) {
+      if (ed && !ed.isDestroyed && activeChapterId) {
+        const nextNodes = upsertChapterHtml(
+          outlineNodes,
+          activeChapterId,
+          ed.getHTML(),
+        );
+        setOutlineNodes(nextNodes);
+        return nextNodes;
+      }
+      return outlineNodes;
+    }
     if (!ed || ed.isDestroyed || !activeChapterId) {
       await postOutlineStructure(outlineNodes);
       return outlineNodes;
@@ -693,6 +1305,16 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     await postOutlineStructure(nextNodes);
     return nextNodes;
   }, [activeChapterId, outlineNodes, postOutlineStructure]);
+
+  const prevChapterEditTabRef = useRef<"read" | "edit">("edit");
+  useEffect(() => {
+    const prev = prevChapterEditTabRef.current;
+    prevChapterEditTabRef.current = chapterEditTab;
+    // 关键修复：从“编辑”切回“阅读”时，立即落盘当前章节内容，不再依赖切章触发保存。
+    if (prev === "edit" && chapterEditTab === "read") {
+      void persistActiveChapterBeforePublish();
+    }
+  }, [chapterEditTab, persistActiveChapterBeforePublish]);
 
   const handlePublishConfirm = useCallback(
     async (payload: {
@@ -707,32 +1329,77 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       layoutMode: PublishLayoutMode;
     }) => {
       if (!authorId) throw new Error("请先连接钱包");
-      // Ensure publish uses latest active chapter content persisted on server.
-      const latestNodes = await persistActiveChapterBeforePublish();
-      const allChapterIds = latestNodes
-        .filter((n) => n.kind === "chapter")
-        .map((n) => n.id);
-      const r = await fetch("/api/v1/novel-publish", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-wallet-address": authorId,
-        },
-        body: JSON.stringify({
-          authorId,
-          novelId,
-          allChapterIds,
-          ...payload,
-        }),
-      });
-      const data = (await r.json()) as {
-        record?: NovelPublishRecord;
-        error?: string;
+      const runPublish = async (alreadyNotifiedAiReflow: boolean) => {
+        // Ensure publish uses latest active chapter content persisted on server.
+        const latestNodes = await persistActiveChapterBeforePublish();
+        const allChapterIds = latestNodes
+          .filter((n) => n.kind === "chapter")
+          .map((n) => n.id);
+        const ac = new AbortController();
+        const timeoutId = window.setTimeout(() => ac.abort(), PUBLISH_SUBMIT_TIMEOUT_MS);
+        let r: Response;
+        try {
+          r = await fetch("/api/v1/novel-publish", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-wallet-address": authorId,
+            },
+            signal: ac.signal,
+            body: JSON.stringify({
+              authorId,
+              novelId,
+              allChapterIds,
+              firstLineIndent: firstLineIndentEnabled,
+              ...payload,
+            }),
+          });
+        } catch (e) {
+          if (e instanceof DOMException && e.name === "AbortError") {
+            throw new Error("提交超时：请检查网络或稍后重试。");
+          }
+          throw e;
+        } finally {
+          window.clearTimeout(timeoutId);
+        }
+
+        let data: {
+          record?: NovelPublishRecord;
+          error?: string;
+          aiReflowQueued?: boolean;
+        };
+        try {
+          data = (await r.json()) as typeof data;
+        } catch {
+          data = {};
+        }
+        if (!r.ok) throw new Error(data.error ?? "发布失败");
+        setPublishRecord(data.record ?? null);
+        if (data.aiReflowQueued && !alreadyNotifiedAiReflow) {
+          scheduleAiReflowBackgroundNotify(watchAiReflowCompletion);
+        }
       };
-      if (!r.ok) throw new Error(data.error ?? "发布失败");
-      setPublishRecord(data.record ?? null);
+
+      const shouldInstantBackgroundNotify =
+        payload.visibility === "public" && payload.layoutMode === "ai_reflow";
+
+      if (shouldInstantBackgroundNotify) {
+        scheduleAiReflowBackgroundNotify(watchAiReflowCompletion);
+        void runPublish(true).catch((e) => {
+          window.alert(e instanceof Error ? e.message : "发布失败");
+        });
+        return;
+      }
+
+      await runPublish(false);
     },
-    [authorId, novelId, persistActiveChapterBeforePublish],
+    [
+      authorId,
+      novelId,
+      persistActiveChapterBeforePublish,
+      watchAiReflowCompletion,
+      firstLineIndentEnabled,
+    ],
   );
 
   const handleAutoFillPublishMeta = useCallback(
@@ -773,6 +1440,34 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     [authorId, novelId],
   );
 
+  const handleToggleFirstLineIndent = useCallback(
+    async (nextChecked: boolean) => {
+      setFirstLineIndentEnabled(nextChecked);
+      if (!authorId || !publishRecord) return;
+      try {
+        const r = await fetch("/api/v1/novel-publish", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-wallet-address": authorId,
+          },
+          body: JSON.stringify({
+            action: "set_reader_style",
+            authorId,
+            novelId,
+            firstLineIndent: nextChecked,
+          }),
+        });
+        const data = (await r.json()) as { record?: NovelPublishRecord; error?: string };
+        if (!r.ok) throw new Error(data.error ?? "保存段落样式失败");
+        if (data.record) setPublishRecord(data.record);
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "保存段落样式失败");
+      }
+    },
+    [authorId, publishRecord, novelId],
+  );
+
   const toggleCurrentChapterPublish = useCallback(
     async (publish: boolean, options?: { layoutMode?: PublishLayoutMode }) => {
       if (!authorId || !activeChapterId) return;
@@ -782,7 +1477,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       }
       setChapterPublishSubmitting(true);
       try {
-        await persistActiveChapterBeforePublish();
+        const latestNodes = await persistActiveChapterBeforePublish();
         const r = await fetch("/api/v1/novel-publish", {
           method: "POST",
           headers: {
@@ -801,9 +1496,22 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         const data = (await r.json()) as {
           record?: NovelPublishRecord;
           error?: string;
+          aiReflowQueued?: boolean;
         };
         if (!r.ok) throw new Error(data.error ?? "章节发布操作失败");
         setPublishRecord(data.record ?? null);
+        if (data.aiReflowQueued) {
+          scheduleAiReflowBackgroundNotify(watchAiReflowCompletion);
+        }
+        const cid = activeChapterId;
+        const patched = patchChapterPublishFingerprintInNodes(
+          latestNodes,
+          cid,
+          publish,
+        );
+        delete publishBaselineSessionRef.current[cid];
+        setOutlineNodes(patched);
+        void postOutlineStructure(patched);
       } catch (e) {
         window.alert(e instanceof Error ? e.message : "章节发布操作失败");
       } finally {
@@ -816,60 +1524,87 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       displayPublishStatus,
       novelId,
       persistActiveChapterBeforePublish,
+      postOutlineStructure,
       publishLayoutMode,
+      watchAiReflowCompletion,
     ],
   );
 
   /** 瞬时写入 localStorage，并防抖后同步服务端（与 onUpdate 2000ms 一致）。 */
-  const flushWritingContext = useCallback((editor: Editor) => {
-    const aid = authorIdRef.current;
-    if (!aid || editor.isDestroyed) return;
+  const flushWritingContext = useCallback(
+    (editor: Editor, forcedChapterId?: string | null) => {
+      const aid = authorIdRef.current;
+      if (!aid || editor.isDestroyed) return;
+      const chapterId = forcedChapterId ?? activeChapterIdRef.current;
+      if (!chapterId) return;
 
-    const now = Date.now();
-    const selectionJson = editor.state.selection.toJSON() as NonNullable<
-      WritingContextPayload["selectionJson"]
-    >;
-    const { from, to } = editor.state.selection;
-    const scrollTop = editorScrollRef.current?.scrollTop ?? 0;
-    const writingSnippet = computeWritingSnippet(editor);
-    const iso = new Date().toISOString();
+      const now = Date.now();
+      const selectionJson = editor.state.selection.toJSON() as NonNullable<
+        WritingContextPayload["selectionJson"]
+      >;
+      const { from, to } = editor.state.selection;
+      const scrollTop = editorScrollRef.current?.scrollTop ?? 0;
+      const writingSnippet = computeWritingSnippet(editor);
+      const iso = new Date().toISOString();
 
-    const payload: WritingContextPayload = {
-      html: editor.getHTML(),
-      json: editor.getJSON(),
-      selection: { from, to },
-      selectionJson,
-      lastActionTimestamp: now,
-      viewportScroll: scrollTop,
-      writingSnippet,
-      updatedAt: iso,
-    };
+      const payload: WritingContextPayload = {
+        html: editor.getHTML(),
+        json: editor.getJSON(),
+        chapterId,
+        chapterHash: chapterHashById(outlineNodesRef.current, chapterId),
+        selection: { from, to },
+        selectionJson,
+        lastActionTimestamp: now,
+        viewportScroll: scrollTop,
+        writingSnippet,
+        updatedAt: iso,
+      };
 
-    const docId = novelIdRef.current;
-    writeWritingContextToStorage(aid, docId, payload);
+      const docId = novelIdRef.current;
+      writeWritingContextToStorage(aid, docId, payload);
 
-    void fetch("/api/v1/save-draft", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        authorId: aid,
-        docId,
-        html: payload.html,
-        json: payload.json,
-        selection: payload.selection,
-        selectionJson: payload.selectionJson,
-        lastActionTimestamp: payload.lastActionTimestamp,
-        viewportScroll: payload.viewportScroll,
-        writingSnippet: payload.writingSnippet,
-      }),
-    }).catch(() => {
-      /* 静默失败，避免打断写作 */
-    });
-  }, []);
+      const ac = new AbortController();
+      const timeoutId = window.setTimeout(() => ac.abort(), SAVE_DRAFT_POST_TIMEOUT_MS);
+      void fetch("/api/v1/save-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
+        body: JSON.stringify({
+          mode: "patch_lite",
+          authorId: aid,
+          docId,
+          html: payload.html,
+          chapterId: payload.chapterId,
+          chapterHash: payload.chapterHash,
+          selection: payload.selection,
+          selectionJson: payload.selectionJson,
+          lastActionTimestamp: payload.lastActionTimestamp,
+          viewportScroll: payload.viewportScroll,
+          writingSnippet: payload.writingSnippet,
+        }),
+      })
+        .catch(() => {
+        /* 静默失败，避免打断写作 */
+        })
+        .finally(() => {
+          window.clearTimeout(timeoutId);
+        });
+    },
+    [],
+  );
 
   const applyRestoredContext = useCallback(
-    (editor: Editor, payload: WritingContextPayload) => {
-      if (editor.isDestroyed) return;
+    (editor: Editor, payload: WritingContextPayload, chapterId: string): boolean => {
+      if (editor.isDestroyed) return false;
+      if (payload.chapterId !== chapterId) {
+        return false;
+      }
+      if (payload.chapterHash) {
+        const currentHash = chapterHashById(outlineNodesRef.current, chapterId);
+        if (currentHash && currentHash !== payload.chapterHash) {
+          return false;
+        }
+      }
       const hasJson =
         payload.json !== null &&
         typeof payload.json === "object" &&
@@ -882,12 +1617,91 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         });
       } else if (hasHtml) {
         editor.commands.setContent(payload.html!, { emitUpdate: false });
+      } else {
+        return false;
       }
       applySelectionToEditor(editor, payload);
       applyViewportScroll(editorScrollRef.current, payload.viewportScroll);
+      return true;
     },
-    [],
+    [chapterHashById],
   );
+
+  useEffect(() => {
+    const persistNow = () => {
+      const aid = authorIdRef.current;
+      const chapterId = activeChapterIdRef.current;
+      const ed = editorInstanceRef.current;
+      if (!aid || !chapterId || !ed || ed.isDestroyed) return;
+      // 本地快照先落，避免突然关闭丢失当前编辑。
+      flushWritingContext(ed, chapterId);
+      if (!outlineStructureReadyRef.current) return;
+      const nextNodes = snapshotNodesWithActiveChapter();
+      setOutlineNodes(nextNodes);
+      const chapterNode = nextNodes.find(
+        (n) => n.id === chapterId && n.kind === "chapter",
+      );
+      if (!chapterNode) return;
+      void fetch("/api/v1/update-structure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({
+          authorId: aid,
+          docId: novelIdRef.current,
+          chapterId,
+          chapterNode,
+        }),
+      }).catch(() => {
+        /* ignore */
+      });
+    };
+
+    const onPageHide = () => persistNow();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") persistNow();
+    };
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [flushWritingContext, snapshotNodesWithActiveChapter]);
+
+  /** SPA 离开编辑页时尽量落盘；大纲未成功加载时不 POST，避免用占位单章覆盖服务端 */
+  useEffect(() => {
+    return () => {
+      const aid = authorIdRef.current;
+      if (!aid || !outlineStructureReadyRef.current) return;
+      const chapterId = activeChapterIdRef.current;
+      const ed = editorInstanceRef.current;
+      if (!chapterId || !ed || ed.isDestroyed) return;
+      flushWritingContext(ed, chapterId);
+      const nextNodes = upsertChapterHtml(
+        outlineNodesRef.current,
+        chapterId,
+        ed.getHTML(),
+      );
+      const chapterNode = nextNodes.find(
+        (n) => n.id === chapterId && n.kind === "chapter",
+      );
+      if (!chapterNode) return;
+      void fetch("/api/v1/update-structure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({
+          authorId: aid,
+          docId: novelIdRef.current,
+          chapterId,
+          chapterNode,
+        }),
+      }).catch(() => {
+        /* ignore */
+      });
+    };
+  }, [flushWritingContext]);
 
   const persistPersonas = useCallback(async (list: Persona[]) => {
     const aid = authorIdRef.current;
@@ -1008,8 +1822,11 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   useEffect(() => {
     if (!authorId) {
       setOutlineNodes(createDefaultChapterOneNodes());
+      setOutlineStructureReady(true);
       return;
     }
+    const gen = (outlineFetchGenRef.current += 1);
+    setOutlineStructureReady(false);
     const ac = new AbortController();
     const docId = novelId;
     void (async () => {
@@ -1018,31 +1835,38 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           `/api/v1/update-structure?authorId=${encodeURIComponent(authorId)}&docId=${encodeURIComponent(docId)}`,
           { signal: ac.signal },
         );
-        if (!r.ok || ac.signal.aborted) return;
+        if (ac.signal.aborted || outlineFetchGenRef.current !== gen) return;
+        if (!r.ok) {
+          return;
+        }
         const data = (await r.json()) as {
           nodes: PlotNode[] | null;
           updatedAt: string | null;
         };
-        if (ac.signal.aborted) return;
+        if (ac.signal.aborted || outlineFetchGenRef.current !== gen) return;
         if (data.nodes && data.nodes.length > 0) {
           setOutlineNodes(data.nodes);
-        } else {
-          const chapterOne = createDefaultChapterOneNodes();
-          setOutlineNodes(chapterOne);
-          try {
-            await fetch("/api/v1/update-structure", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                authorId,
-                docId: novelId,
-                nodes: chapterOne,
-              }),
-            });
-          } catch {
-            /* 与 postOutlineStructure 一致：静默 */
-          }
+          setOutlineStructureReady(true);
+          return;
         }
+        // GET 成功且服务端尚无结构：种子一章（新作品）
+        const chapterOne = createDefaultChapterOneNodes();
+        setOutlineNodes(chapterOne);
+        try {
+          await fetch("/api/v1/update-structure", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              authorId,
+              docId: novelId,
+              nodes: chapterOne,
+            }),
+          });
+        } catch {
+          /* 与 postOutlineStructure 一致：静默 */
+        }
+        if (outlineFetchGenRef.current !== gen) return;
+        setOutlineStructureReady(true);
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
       }
@@ -1102,6 +1926,34 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     editorInstanceRef.current = editorInstance ?? null;
   }, [editorInstance]);
 
+  /** 大纲就绪后把当前章 metadata 灌入编辑器，避免占位空文档被当成正文写回错误章节 */
+  useEffect(() => {
+    if (
+      !outlineStructureReady ||
+      !editorInstance ||
+      editorInstance.isDestroyed ||
+      !activeChapterId
+    ) {
+      return;
+    }
+    const node = outlineNodes.find(
+      (n) => n.id === activeChapterId && n.kind === "chapter",
+    );
+    if (!node) return;
+    const pairKey = `${novelId}|${activeChapterId}`;
+    if (lastEditorOutlineHydrationKeyRef.current === pairKey) return;
+    lastEditorOutlineHydrationKeyRef.current = pairKey;
+    const html = chapterHtmlFromNode(node) ?? "<p></p>";
+    editorInstance.commands.setContent(html, { emitUpdate: false });
+    setDocTick((t) => t + 1);
+  }, [
+    outlineStructureReady,
+    activeChapterId,
+    editorInstance,
+    novelId,
+    outlineNodes,
+  ]);
+
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -1109,10 +1961,12 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   }, []);
 
   useEffect(() => {
-    if (!editorInstance || editorInstance.isDestroyed || !authorId) return;
+    if (!editorInstance || editorInstance.isDestroyed || !authorId || !activeChapterId) {
+      return;
+    }
 
     const docId = novelId;
-    const loadKey = `${authorId}:${docId}`;
+    const loadKey = `${authorId}:${docId}:${activeChapterId}`;
     if (draftLoadedKeyRef.current === loadKey) return;
 
     const ac = new AbortController();
@@ -1126,8 +1980,8 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           !editorInstance.isDestroyed &&
           !ac.signal.aborted
         ) {
-          applyRestoredContext(editorInstance, local);
-          setDocTick((t) => t + 1);
+          const restored = applyRestoredContext(editorInstance, local, activeChapterId);
+          if (restored) setDocTick((t) => t + 1);
         }
 
         const r = await fetch(
@@ -1148,13 +2002,16 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
 
         const localTs = local?.lastActionTimestamp ?? -1;
         if (merged.lastActionTimestamp > localTs) {
-          applyRestoredContext(editorInstance, merged);
-          setDocTick((t) => t + 1);
+          const restored = applyRestoredContext(editorInstance, merged, activeChapterId);
+          if (restored) setDocTick((t) => t + 1);
         }
 
         draftLoadedKeyRef.current = loadKey;
 
-        if (shouldShowWakeupBar(merged.lastActionTimestamp)) {
+        if (
+          merged.chapterId === activeChapterId &&
+          shouldShowWakeupBar(merged.lastActionTimestamp)
+        ) {
           setWakeup({
             authorLabel: formatAuthorLabel(authorId),
             snippet: merged.writingSnippet?.trim() || "……",
@@ -1172,7 +2029,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     })();
 
     return () => ac.abort();
-  }, [editorInstance, authorId, novelId, applyRestoredContext]);
+  }, [editorInstance, authorId, novelId, activeChapterId, applyRestoredContext]);
 
   const handleWakeupEnter = useCallback(() => {
     if (!editorInstance || editorInstance.isDestroyed || !wakeup) return;
@@ -1212,14 +2069,24 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   );
 
   useEffect(() => {
+    if (!resumeStateLoaded) return;
+    if (authorId && !outlineStructureReady) return;
     if (chapterNodes.length === 0) {
-      setActiveChapterId(null);
+      setActiveChapterIdSafe(null);
       return;
     }
+    const lastChapter = chapterNodes[chapterNodes.length - 1];
     if (!activeChapterId || !chapterNodes.some((c) => c.id === activeChapterId)) {
-      setActiveChapterId(chapterNodes[0].id);
+      setActiveChapterIdSafe(lastChapter.id);
     }
-  }, [chapterNodes, activeChapterId]);
+  }, [
+    chapterNodes,
+    activeChapterId,
+    resumeStateLoaded,
+    authorId,
+    outlineStructureReady,
+    setActiveChapterIdSafe,
+  ]);
 
   const persistCurrentChapterContent = useCallback(() => {
     const ed = editorInstance;
@@ -1236,11 +2103,11 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       const targetHtml = chapterHtmlFromNode(target) ?? "<p></p>";
       setOutlineNodes(nextNodes);
       void postOutlineStructure(nextNodes);
-      setActiveChapterId(chapter.id);
+      setActiveChapterIdSafe(chapter.id);
       if (!ed || ed.isDestroyed) return;
       ed.commands.setContent(targetHtml, { emitUpdate: true });
       setDocTick((t) => t + 1);
-      flushWritingContext(ed);
+      flushWritingContext(ed, chapter.id);
       ed.chain().focus().setTextSelection({ from: 1, to: 1 }).run();
     },
     [
@@ -1265,7 +2132,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       const nextNodes = currentNodes.filter((n) => n.id !== chapterId);
       const nextChapterNodes = nextNodes.filter((n) => n.kind === "chapter");
       setOutlineNodes(nextNodes);
-      void postOutlineStructure(nextNodes);
+      void postOutlineStructure(nextNodes, { mode: "full" });
 
       setPublishRecord((prev) => {
         if (!prev?.publishedChapterIds?.includes(chapterId)) return prev;
@@ -1274,14 +2141,14 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           publishedChapterIds: prev.publishedChapterIds.filter((id) => id !== chapterId),
         };
       });
+      delete publishBaselineSessionRef.current[chapterId];
 
       const ed = editorInstance;
       if (nextChapterNodes.length === 0) {
-        setActiveChapterId(null);
+        setActiveChapterIdSafe(null);
         if (!ed || ed.isDestroyed) return;
         ed.commands.setContent("<p></p>", { emitUpdate: true });
         setDocTick((t) => t + 1);
-        flushWritingContext(ed);
         ed.chain().focus().setTextSelection({ from: 1, to: 1 }).run();
         return;
       }
@@ -1294,11 +2161,11 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         nextChapterNodes[Math.min(deleteIndex, nextChapterNodes.length - 1)] ??
         nextChapterNodes[0];
       const fallbackHtml = chapterHtmlFromNode(fallback) ?? "<p></p>";
-      setActiveChapterId(fallback.id);
+      setActiveChapterIdSafe(fallback.id);
       if (!ed || ed.isDestroyed) return;
       ed.commands.setContent(fallbackHtml, { emitUpdate: true });
       setDocTick((t) => t + 1);
-      flushWritingContext(ed);
+      flushWritingContext(ed, fallback.id);
       ed.chain().focus().setTextSelection({ from: 1, to: 1 }).run();
     },
     [
@@ -1319,8 +2186,12 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     const title = buildChapterTitle(nextNo);
 
     const nextNodes = persistCurrentChapterContent();
-    let parentVolumeId = nextNodes.find((n) => n.kind === "volume")?.id;
-    if (!parentVolumeId) {
+    const { parentId, createVolumeIfMissing } = resolveParentForNewChapter(
+      nextNodes,
+      activeChapterId ?? null,
+    );
+    let parentForChapter = parentId;
+    if (createVolumeIfMissing) {
       const vId = makePlotNodeId("plot-volume");
       nextNodes.push({
         id: vId,
@@ -1328,8 +2199,9 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         title: "",
         summary: "",
       });
-      parentVolumeId = vId;
+      parentForChapter = vId;
     }
+    if (!parentForChapter) return;
 
     const newChapter: PlotNode = {
       id: makePlotNodeId("plot-chapter"),
@@ -1337,22 +2209,23 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       title,
       summary: "",
       tags: [],
-      parentId: parentVolumeId,
+      parentId: parentForChapter,
       metadata: { chapterHtml: "<p></p>" },
     };
     nextNodes.push(newChapter);
     setOutlineNodes(nextNodes);
-    void postOutlineStructure(nextNodes);
-    setActiveChapterId(newChapter.id);
+    void postOutlineStructure(nextNodes, { mode: "full" });
+    setActiveChapterIdSafe(newChapter.id);
 
     const ed = editorInstance;
     if (!ed || ed.isDestroyed) return;
     ed.commands.setContent("<p></p>", { emitUpdate: true });
     setDocTick((t) => t + 1);
-    flushWritingContext(ed);
+    flushWritingContext(ed, newChapter.id);
     ed.chain().focus().setTextSelection({ from: 1, to: 1 }).run();
   }, [
     chapterNodes,
+    activeChapterId,
     persistCurrentChapterContent,
     postOutlineStructure,
     editorInstance,
@@ -1400,6 +2273,39 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     Boolean(authorId) && (publishContentReady || hasPublishSave);
   const isCurrentChapterPublished = Boolean(
     activeChapterId && publishedChapterIdSet.has(activeChapterId),
+  );
+  const chapterPublishDirtySet = useMemo(() => {
+    const dirty = new Set<string>();
+    const ed = editorInstance;
+    const edOk = Boolean(ed && !ed.isDestroyed);
+    for (const n of outlineNodes) {
+      if (n.kind !== "chapter") continue;
+      if (!publishedChapterIdSet.has(n.id)) continue;
+      const liveHtml =
+        edOk && n.id === activeChapterId ? ed!.getHTML() : null;
+      const cur = chapterBodyFingerprintForCompare(n, liveHtml);
+      const stored = readPublishedContentFingerprint(n);
+      let baseline: string;
+      if (stored) {
+        baseline = stored;
+      } else {
+        if (publishBaselineSessionRef.current[n.id] === undefined) {
+          publishBaselineSessionRef.current[n.id] = cur;
+        }
+        baseline = publishBaselineSessionRef.current[n.id];
+      }
+      if (cur !== baseline) dirty.add(n.id);
+    }
+    return dirty;
+  }, [
+    outlineNodes,
+    publishedChapterIdSet,
+    docTick,
+    activeChapterId,
+    editorInstance,
+  ]);
+  const isCurrentChapterPublishDirty = Boolean(
+    activeChapterId && chapterPublishDirtySet.has(activeChapterId),
   );
   const isPublishedChapterReadOnly =
     isCurrentChapterPublished && chapterEditTab !== "edit";
@@ -1547,12 +2453,24 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   );
 
   const publishCurrentChapterFromMarkdown = useCallback(
-    async (renderedHtml: string) => {
+    async (markdown: string) => {
       if (!authorId || !activeChapterId) {
         throw new Error("请先选择章节并连接钱包");
       }
-      const html = renderedHtml.trim() || "<p></p>";
-      const nextNodes = upsertChapterHtml(outlineNodes, activeChapterId, html);
+      const md = typeof markdown === "string" ? markdown : "";
+      const maybe = marked.parse(md, { breaks: true, gfm: true });
+      const htmlRaw = typeof maybe === "string" ? maybe : await maybe;
+      let html =
+        htmlRaw && String(htmlRaw).trim().length > 0
+          ? String(htmlRaw).trim()
+          : "<p></p>";
+      html = normalizeMarkedHtmlForTipTap(html);
+      const nextNodes = upsertChapterMarkdownAndHtml(
+        outlineNodes,
+        activeChapterId,
+        md,
+        html,
+      );
       setOutlineNodes(nextNodes);
       applyRenderedHtmlToEditor(html);
       await postOutlineStructure(nextNodes);
@@ -1569,48 +2487,71 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   );
 
   const openMarkdownEditor = useCallback(() => {
-    if (!authorId || !editorInstance || editorInstance.isDestroyed) return;
-    const currentHtml = editorInstance.getHTML();
-    const markdownSeed = htmlToMarkdownSeed(currentHtml);
+    if (!authorId) return;
+    if (!editorInstance || editorInstance.isDestroyed) {
+      window.alert("编辑器尚未就绪，请稍候再试 Markdown 编辑器。");
+      return;
+    }
+    const chapterNode = outlineNodes.find((n) => n.id === activeChapterId);
+    const savedMd = chapterMarkdownFromNode(chapterNode);
+    const markdownSeed =
+      savedMd ?? htmlToMarkdownSeed(editorInstance.getHTML());
+    const sessionToken =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `md-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    markdownEditorSessionTokenRef.current = sessionToken;
     const popup = window.open(
       "",
       "_blank",
       "popup=yes,width=1360,height=900,resizable=yes,scrollbars=yes",
     );
     if (!popup) {
+      markdownEditorSessionTokenRef.current = null;
       window.alert("浏览器拦截了新窗口，请允许弹窗后重试。");
       return;
     }
     popup.document.open();
-    popup.document.write(buildMarkdownEditorWindowHtml(markdownSeed));
+    popup.document.write(
+      buildMarkdownEditorWindowHtml(markdownSeed, sessionToken, authorId),
+    );
     popup.document.close();
     popup.focus();
     markdownEditorPopupRef.current = popup;
-  }, [authorId, editorInstance]);
+  }, [authorId, editorInstance, outlineNodes, activeChapterId]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<unknown>) => {
       if (event.origin !== window.location.origin) return;
-      if (event.source !== markdownEditorPopupRef.current) return;
       if (!event.data || typeof event.data !== "object") return;
       const payload = event.data as {
         type?: unknown;
+        token?: unknown;
         markdown?: unknown;
         renderedHtml?: unknown;
       };
       if (payload.type !== MARKDOWN_EDITOR_POPUP_MESSAGE_TYPE) return;
+      const expected = markdownEditorSessionTokenRef.current;
+      if (
+        typeof payload.token !== "string" ||
+        !expected ||
+        payload.token !== expected
+      ) {
+        return;
+      }
       void (async () => {
-        let renderedHtml = "";
-        if (typeof payload.renderedHtml === "string") {
-          renderedHtml = payload.renderedHtml;
-        } else if (typeof payload.markdown === "string") {
-          const maybe = marked.parse(payload.markdown, { breaks: true, gfm: true });
-          renderedHtml = typeof maybe === "string" ? maybe : await maybe;
+        try {
+          if (typeof payload.markdown !== "string") {
+            window.alert("未收到 Markdown 正文，请重试。");
+            return;
+          }
+          await publishCurrentChapterFromMarkdown(payload.markdown);
+        } catch (e) {
+          window.alert(e instanceof Error ? e.message : "发布失败");
+        } finally {
+          markdownEditorSessionTokenRef.current = null;
         }
-        await publishCurrentChapterFromMarkdown(renderedHtml);
-      })().catch((e) => {
-        window.alert(e instanceof Error ? e.message : "发布失败");
-      });
+      })();
     };
     window.addEventListener("message", onMessage);
     return () => {
@@ -1619,6 +2560,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         markdownEditorPopupRef.current.close();
       }
       markdownEditorPopupRef.current = null;
+      markdownEditorSessionTokenRef.current = null;
     };
   }, [publishCurrentChapterFromMarkdown]);
 
@@ -1739,7 +2681,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             ];
 
             setOutlineNodes(nextNodes);
-            void postOutlineStructure(nextNodes);
+            void postOutlineStructure(nextNodes, { mode: "full" });
             const latestChapterIds = nextNodes
               .filter((n) => n.kind === "chapter")
               .map((n) => n.id);
@@ -1765,9 +2707,13 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                 const syncData = (await syncResp.json()) as {
                   record?: NovelPublishRecord;
                   error?: string;
+                  aiReflowQueued?: boolean;
                 };
                 if (syncResp.ok && syncData.record) {
                   setPublishRecord(syncData.record);
+                  if (syncData.aiReflowQueued) {
+                    scheduleAiReflowBackgroundNotify(watchAiReflowCompletion);
+                  }
                 } else {
                   window.alert(syncData.error ?? "章节重建后同步发布状态失败，请手动点击“一键发布全部章节”。");
                 }
@@ -1780,10 +2726,10 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             const firstHtml = firstChapter
               ? chapterHtmlFromNode(firstChapter) ?? "<p></p>"
               : "<p></p>";
-            if (firstChapter) setActiveChapterId(firstChapter.id);
+            if (firstChapter) setActiveChapterIdSafe(firstChapter.id);
             editorInstance.commands.setContent(firstHtml, { emitUpdate: true });
             setDocTick((t) => t + 1);
-            flushWritingContext(editorInstance);
+            flushWritingContext(editorInstance, firstChapter?.id ?? null);
 
             if (data.engine === "rule") {
               window.alert("已按本地规则完成切章。");
@@ -1816,6 +2762,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       postOutlineStructure,
       publishLayoutMode,
       publishRecord?.visibility,
+      watchAiReflowCompletion,
     ],
   );
 
@@ -1990,7 +2937,9 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         <OutlineSidebar
           nodes={outlineNodes}
           onNodesChange={setOutlineNodes}
-          onUpdateStructure={postOutlineStructure}
+          onUpdateStructure={(nodes) => {
+            void postOutlineStructure(nodes, { mode: "full" });
+          }}
           onNodeSeek={handleOutlineSeek}
           onChapterSelect={(chapterId) => {
             const chapter = chapterNodes.find((c) => c.id === chapterId);
@@ -2004,6 +2953,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           }
           withdrawPublishDisabled={!authorId}
           publishedChapterIds={publishRecord?.publishedChapterIds ?? []}
+          publishedChapterDirtyIds={chapterPublishDirtySet}
           chapterPublishDisabled={displayPublishStatus === "draft"}
           onToggleChapterPublish={(chapterId, publish) => {
             if (chapterPublishSubmitting) return;
@@ -2011,7 +2961,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
               if (!authorId) return;
               setChapterPublishSubmitting(true);
               try {
-                await persistActiveChapterBeforePublish();
+                const latestNodes = await persistActiveChapterBeforePublish();
                 const r = await fetch("/api/v1/novel-publish", {
                   method: "POST",
                   headers: {
@@ -2030,9 +2980,24 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                 const data = (await r.json()) as {
                   record?: NovelPublishRecord;
                   error?: string;
+                  aiReflowQueued?: boolean;
                 };
                 if (!r.ok) throw new Error(data.error ?? "章节发布操作失败");
                 setPublishRecord(data.record ?? null);
+                if (data.aiReflowQueued) {
+                  scheduleAiReflowBackgroundNotify(watchAiReflowCompletion);
+                }
+                const patched = patchChapterPublishFingerprintInNodes(
+                  latestNodes,
+                  chapterId,
+                  publish,
+                );
+                delete publishBaselineSessionRef.current[chapterId];
+                setOutlineNodes(patched);
+                void postOutlineStructure(patched, {
+                  mode: "chapter_patch",
+                  chapterId,
+                });
               } catch (e) {
                 window.alert(e instanceof Error ? e.message : "章节发布操作失败");
               } finally {
@@ -2074,10 +3039,28 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                 const data = (await r.json()) as {
                   record?: NovelPublishRecord;
                   error?: string;
+                  aiReflowQueued?: boolean;
                 };
                 if (!r.ok) throw new Error(data.error ?? "一键发布全部章节失败");
-                setPublishRecord(data.record ?? null);
-                window.alert("已发布全部章节");
+                const record = data.record ?? null;
+                setPublishRecord(record);
+                if (data.aiReflowQueued) {
+                  scheduleAiReflowBackgroundNotify(watchAiReflowCompletion);
+                } else {
+                  window.alert("已发布全部章节");
+                }
+                const publishedIds =
+                  record?.publishedChapterIds?.length &&
+                  record.publishedChapterIds.length > 0
+                    ? record.publishedChapterIds
+                    : latestChapterIds;
+                const patched = patchAllListedChaptersPublishFingerprint(
+                  latestNodes,
+                  publishedIds,
+                );
+                publishBaselineSessionRef.current = {};
+                setOutlineNodes(patched);
+                void postOutlineStructure(patched, { mode: "full" });
               } catch (e) {
                 window.alert(e instanceof Error ? e.message : "一键发布全部章节失败");
               } finally {
@@ -2403,6 +3386,17 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                   已发布章节默认只读，点击“编辑”可修改
                 </span>
               ) : null}
+              {chapterEditTab === "edit" ? (
+                <label className="ml-2 inline-flex items-center gap-1 text-[11px] text-neutral-600 dark:text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={firstLineIndentEnabled}
+                    onChange={(e) => void handleToggleFirstLineIndent(e.target.checked)}
+                    className="accent-cyan-600"
+                  />
+                  首行缩进
+                </label>
+              ) : null}
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2485,6 +3479,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             className={[
               "relative z-0 min-h-0 overflow-y-auto border-b border-neutral-200 dark:border-neutral-800 lg:border-b-0",
               showPersonaInspector ? "lg:border-r" : "",
+              chapterEditTab === "edit" && firstLineIndentEnabled ? "[&_p]:indent-[2em]" : "",
             ].join(" ")}
           >
             {editorInstance && <EditorContent editor={editorInstance} />}
@@ -2550,12 +3545,18 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             {activeChapterIndex >= 0 && displayPublishStatus !== "draft" ? (
               <span
                 className={
-                  isCurrentChapterPublished
-                    ? "ml-2 rounded bg-emerald-600/20 px-1.5 py-0.5 text-emerald-500"
-                    : "ml-2 rounded bg-amber-600/20 px-1.5 py-0.5 text-amber-500"
+                  !isCurrentChapterPublished
+                    ? "ml-2 rounded bg-amber-600/20 px-1.5 py-0.5 text-amber-500"
+                    : isCurrentChapterPublishDirty
+                      ? "ml-2 rounded bg-orange-600/20 px-1.5 py-0.5 text-orange-400"
+                      : "ml-2 rounded bg-emerald-600/20 px-1.5 py-0.5 text-emerald-500"
                 }
               >
-                {isCurrentChapterPublished ? "已发布" : "未发布"}
+                {!isCurrentChapterPublished
+                  ? "未发布"
+                  : isCurrentChapterPublishDirty
+                    ? "更新修改"
+                    : "已发布"}
               </span>
             ) : null}
           </div>
@@ -2635,11 +3636,9 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                   type="button"
                   disabled={!authorId || isPublishedChapterReadOnly}
                   onClick={() => {
-                    const rendered =
-                      ((marked.parse(translationResultMarkdown, {
-                        breaks: true,
-                      }) as string) ?? "");
-                    void publishCurrentChapterFromMarkdown(rendered)
+                    void publishCurrentChapterFromMarkdown(
+                      translationResultMarkdown,
+                    )
                       .then(() => {
                         window.alert("译文已应用到当前章节");
                         setTranslationCompareOpen(false);

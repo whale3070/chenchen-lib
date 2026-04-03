@@ -59,6 +59,13 @@ export async function POST(req: NextRequest) {
   const o = body as Record<string, unknown>;
   const title = typeof o.title === "string" ? o.title.trim() : "";
   const content = typeof o.content === "string" ? o.content.trim() : "";
+  const imageUrls = Array.isArray(o.imageUrls)
+    ? o.imageUrls
+        .filter((x): x is string => typeof x === "string")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, 8)
+    : [];
   if (!title) return badRequest("请填写工单标题");
   if (!content) return badRequest("请填写工单详情");
 
@@ -75,6 +82,7 @@ export async function POST(req: NextRequest) {
     createdBy: wh.walletLower,
     title,
     content,
+    imageUrls,
   });
   return NextResponse.json({ ok: true, ticket });
 }

@@ -31,6 +31,17 @@ export type NovelPublishRecord = {
   publishedChapterIds?: string[];
   /** 发布排版策略：保留原排版 | AI 文本重排 */
   layoutMode?: PublishLayoutMode;
+  /** 阅读页段落样式：是否首行缩进 */
+  firstLineIndent?: boolean;
+  /**
+   * 公开 + AI 自动排版时：后台任务状态。未设置表示无进行中任务。
+   */
+  aiReflowStatus?: "pending" | "running" | "done" | "error";
+  aiReflowError?: string;
+  /** 单调递增，用于作废上一波未完成的后台排版，避免竞态覆盖 */
+  aiReflowGeneration?: number;
+  aiReflowStartedAt?: string;
+  aiReflowFinishedAt?: string;
   publishedAt: string;
   withdrawnAt?: string | null;
 };

@@ -54,6 +54,16 @@ function authorIndexPath(authorId: string) {
   );
 }
 
+function structurePath(authorId: string, docId: string) {
+  const safeDoc = docId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+  return path.join(
+    process.cwd(),
+    ".data",
+    "structure",
+    `${safeAuthorId(authorId)}_${safeDoc}.json`,
+  );
+}
+
 function newNovelId(): string {
   return `nvl-${Date.now().toString(36)}-${randomBytes(5).toString("hex")}`;
 }
@@ -105,6 +115,48 @@ async function readDraftStats(
   }
 }
 
+async function readStructureStats(
+  authorLower: string,
+  novelId: string,
+): Promise<{ wordCount: number; structureUpdatedAt: string | null }> {
+  const fp = structurePath(authorLower, novelId);
+  try {
+    const raw = await fs.readFile(fp, "utf8");
+    const data = JSON.parse(raw) as {
+      updatedAt?: unknown;
+      nodes?: Array<{
+        kind?: unknown;
+        metadata?: {
+          chapterHtml?: unknown;
+          chapterHtmlDesktop?: unknown;
+          chapterHtmlMobile?: unknown;
+        };
+      }>;
+    };
+    const chapterNodes = (data.nodes ?? []).filter((n) => n?.kind === "chapter");
+    let total = 0;
+    for (const n of chapterNodes) {
+      const htmlCandidate =
+        (typeof n?.metadata?.chapterHtml === "string" && n.metadata.chapterHtml) ||
+        (typeof n?.metadata?.chapterHtmlDesktop === "string" && n.metadata.chapterHtmlDesktop) ||
+        (typeof n?.metadata?.chapterHtmlMobile === "string" && n.metadata.chapterHtmlMobile) ||
+        "";
+      if (!htmlCandidate) continue;
+      total += countManuscriptChars(stripHtmlForCount(htmlCandidate));
+    }
+    const structureUpdatedAt =
+      typeof data.updatedAt === "string" ? data.updatedAt : null;
+    return { wordCount: total, structureUpdatedAt };
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return { wordCount: 0, structureUpdatedAt: null };
+    throw e;
+  }
+}
+
 async function readAuthorIndex(authorId: string): Promise<AuthorNovelsIndex> {
   const fp = authorIndexPath(authorId);
   try {
@@ -134,11 +186,15 @@ async function enrichNovels(
 ): Promise<NovelListItem[]> {
   return Promise.all(
     novels.map(async (novel) => {
+      const structureStats = await readStructureStats(authorLower, novel.id);
       const stats = await readDraftStats(authorLower, novel.id);
+      const useStructure = structureStats.wordCount > 0;
       return {
         ...novel,
-        wordCount: stats.wordCount,
-        lastModified: stats.draftUpdatedAt ?? novel.updatedAt,
+        wordCount: useStructure ? structureStats.wordCount : stats.wordCount,
+        lastModified:
+          (useStructure ? structureStats.structureUpdatedAt : stats.draftUpdatedAt) ??
+          novel.updatedAt,
       };
     }),
   );
@@ -260,10 +316,14 @@ export async function PATCH(req: NextRequest) {
   await writeAuthorIndex(idx);
 
   const stats = await readDraftStats(idx.authorId, next.id);
+  const structureStats = await readStructureStats(idx.authorId, next.id);
+  const useStructure = structureStats.wordCount > 0;
   const item: NovelListItem = {
     ...next,
-    wordCount: stats.wordCount,
-    lastModified: stats.draftUpdatedAt ?? next.updatedAt,
+    wordCount: useStructure ? structureStats.wordCount : stats.wordCount,
+    lastModified:
+      (useStructure ? structureStats.structureUpdatedAt : stats.draftUpdatedAt) ??
+      next.updatedAt,
   };
   return NextResponse.json({ novel: item, ok: true });
 }

@@ -89,12 +89,21 @@ function extractImagePlaceholders(html: string): {
 } {
   const placeholders: ImagePlaceholder[] = [];
   let idx = 0;
-  const htmlWithTokens = html.replace(/<img\b[^>]*>/gi, (img) => {
-    idx += 1;
-    const token = `[[IMG_${idx}]]`;
-    placeholders.push({ token, html: img });
-    return `\n\n${token}\n\n`;
-  });
+  /** 整块 figure（常见 TipTap 图片块），避免只抽 img 留下空壳 figure */
+  const htmlWithTokens = html
+    .replace(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi, (block) => {
+      if (!/<img\b/i.test(block)) return block;
+      idx += 1;
+      const token = `[[IMG_${idx}]]`;
+      placeholders.push({ token, html: block });
+      return `\n\n${token}\n\n`;
+    })
+    .replace(/<img\b[^>]*>/gi, (img) => {
+      idx += 1;
+      const token = `[[IMG_${idx}]]`;
+      placeholders.push({ token, html: img });
+      return `\n\n${token}\n\n`;
+    });
   return { htmlWithTokens, placeholders };
 }
 
@@ -197,21 +206,67 @@ function reflowForProfile(text: string, profile: DeviceProfile): string {
 }
 
 function plainTextToHtml(text: string, placeholders: ImagePlaceholder[] = []): string {
+  const imageMap = new Map(placeholders.map((p) => [p.token, p.html]));
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   if (!normalized) return "<p></p>";
-  const paragraphs = normalized.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
-  if (paragraphs.length === 0) return "<p></p>";
-  const imageMap = new Map(placeholders.map((p) => [p.token, p.html]));
-  return paragraphs
-    .map((p) => {
-      const token = p.trim();
-      if (isImageToken(token)) {
-        return imageMap.get(token) ?? "";
+  const blocks = normalized
+    .split(/\n{2,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (blocks.length === 0) return "<p></p>";
+
+  const tokenRe = /\[\[IMG_\d+\]\]/g;
+  const pieces: string[] = [];
+
+  for (const block of blocks) {
+    tokenRe.lastIndex = 0;
+    let lastIdx = 0;
+    let m: RegExpExecArray | null;
+    let foundToken = false;
+    while ((m = tokenRe.exec(block)) !== null) {
+      foundToken = true;
+      const before = block.slice(lastIdx, m.index).trim();
+      if (before) {
+        pieces.push(
+          `<p>${escapeHtml(ensureFirstLineIndent(before)).replace(/\n/g, "<br>")}</p>`,
+        );
       }
-      return `<p>${escapeHtml(ensureFirstLineIndent(p)).replace(/\n/g, "<br>")}</p>`;
-    })
-    .filter(Boolean)
-    .join("");
+      pieces.push(imageMap.get(m[0]) ?? "");
+      lastIdx = m.index + m[0].length;
+    }
+    const tail = block.slice(lastIdx).trim();
+    if (tail) {
+      pieces.push(
+        `<p>${escapeHtml(ensureFirstLineIndent(tail)).replace(/\n/g, "<br>")}</p>`,
+      );
+    } else if (!foundToken) {
+      pieces.push(
+        `<p>${escapeHtml(ensureFirstLineIndent(block)).replace(/\n/g, "<br>")}</p>`,
+      );
+    }
+  }
+
+  const joined = pieces.filter(Boolean).join("");
+  return joined || "<p></p>";
+}
+
+/** 模型偶发把占位符改成全角括号等，尽量修回可识别的 [[IMG_n]] */
+function repairImageTokensInAiOutput(text: string, imageTokens: string[]): string {
+  let out = text;
+  for (const token of imageTokens) {
+    const m = token.match(/^\[\[IMG_(\d+)\]\]$/);
+    if (!m) continue;
+    const num = m[1];
+    const wrong = [
+      new RegExp(`【\\s*IMG_\\s*${num}\\s*】`, "gi"),
+      new RegExp(`［［\\s*IMG_\\s*${num}\\s*］］`, "g"),
+      new RegExp(`\\[IMG_\\s*${num}\\s*\\](?!\\])`, "gi"),
+    ];
+    for (const p of wrong) {
+      out = out.replace(p, token);
+    }
+  }
+  return out;
 }
 
 async function formatByDeepSeek(
@@ -341,6 +396,7 @@ export async function autoFormatChaptersForPublish(params: {
     if (formatted === null) {
       formatted = fallbackFormatPlainText(text, "desktop");
     }
+    formatted = repairImageTokensInAiOutput(formatted, imageTokens);
     formatted = ensureImageTokensPresent(formatted, imageTokens);
     const desktopText = reflowForProfile(formatted, "desktop");
     const mobileText = reflowForProfile(formatted, "mobile");

@@ -8,7 +8,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { autoFormatChaptersForPublish } from "@/lib/server/deepseek-publish-format";
+import { enqueueAiReflowJob } from "@/lib/server/ai-reflow-queue";
+import {
+  readPublishRecordFs,
+  safeNovelSegment,
+  writePublishRecordFs,
+} from "@/lib/server/publish-record-fs";
 import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 import type { NovelPublishRecord } from "@/lib/novel-publish";
 import { NextResponse, type NextRequest } from "next/server";
@@ -29,19 +34,6 @@ function badRequest(message: string) {
 
 function safeAuthorId(id: string) {
   return id.toLowerCase();
-}
-
-function safeNovelSegment(novelId: string) {
-  return novelId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
-}
-
-function publishFilePath(authorLower: string, novelId: string) {
-  return path.join(
-    process.cwd(),
-    ".data",
-    "publish",
-    `${authorLower}_${safeNovelSegment(novelId)}.json`,
-  );
 }
 
 function structureFilePath(authorLower: string, novelId: string) {
@@ -127,30 +119,6 @@ async function readAuthorNovelList(authorLower: string): Promise<NovelMetaLite[]
   return [];
 }
 
-async function readPublishRecord(
-  authorLower: string,
-  novelId: string,
-): Promise<NovelPublishRecord | null> {
-  const fp = publishFilePath(authorLower, novelId);
-  try {
-    const raw = await fs.readFile(fp, "utf8");
-    return JSON.parse(raw) as NovelPublishRecord;
-  } catch (e: unknown) {
-    const code =
-      e && typeof e === "object" && "code" in e
-        ? (e as NodeJS.ErrnoException).code
-        : undefined;
-    if (code === "ENOENT") return null;
-    throw e;
-  }
-}
-
-async function writePublishRecord(rec: NovelPublishRecord) {
-  const fp = publishFilePath(rec.authorId, rec.novelId);
-  await fs.mkdir(path.dirname(fp), { recursive: true });
-  await fs.writeFile(fp, JSON.stringify(rec, null, 2), "utf8");
-}
-
 async function readStructureChapterIds(
   authorLower: string,
   novelId: string,
@@ -196,14 +164,14 @@ export async function GET(req: NextRequest) {
     if (!novels.some((n) => n.id === novelId)) {
       return NextResponse.json({ error: "未找到该小说" }, { status: 404 });
     }
-    const record = await readPublishRecord(wh.walletLower, novelId);
+    const record = await readPublishRecordFs(wh.walletLower, novelId);
     return NextResponse.json({ record });
   }
 
   const novels = await readAuthorNovelList(wh.walletLower);
   const items = await Promise.all(
     novels.map(async (n) => {
-      const record = await readPublishRecord(wh.walletLower, n.id);
+      const record = await readPublishRecordFs(wh.walletLower, n.id);
       return {
         novelId: n.id,
         novelTitle: n.title,
@@ -234,6 +202,85 @@ function parseChapterIds(raw: unknown): string[] {
 
 function normalizeLayoutMode(raw: unknown): "preserve" | "ai_reflow" {
   return raw === "ai_reflow" ? "ai_reflow" : "preserve";
+}
+
+function normalizeFirstLineIndent(raw: unknown): boolean {
+  return raw === true;
+}
+
+/** 取消/覆盖上一波后台排版任务，避免旧任务写回覆盖新配置 */
+function invalidateAiReflowFields(rec: NovelPublishRecord): NovelPublishRecord {
+  return {
+    ...rec,
+    aiReflowGeneration: (rec.aiReflowGeneration ?? 0) + 1,
+    aiReflowStatus: undefined,
+    aiReflowError: undefined,
+    aiReflowStartedAt: undefined,
+    aiReflowFinishedAt: undefined,
+  };
+}
+
+function withPendingAiReflow(
+  rec: NovelPublishRecord,
+  chapterIds: string[],
+): { record: NovelPublishRecord; generation: number; queued: boolean } {
+  if (chapterIds.length === 0) {
+    return { record: rec, generation: rec.aiReflowGeneration ?? 0, queued: false };
+  }
+  const generation = (rec.aiReflowGeneration ?? 0) + 1;
+  return {
+    record: {
+      ...rec,
+      aiReflowGeneration: generation,
+      aiReflowStatus: "pending",
+      aiReflowError: undefined,
+      aiReflowStartedAt: new Date().toISOString(),
+      aiReflowFinishedAt: undefined,
+    },
+    generation,
+    queued: true,
+  };
+}
+
+async function markAiReflowEnqueueFailed(params: {
+  authorLower: string;
+  novelId: string;
+  expectedGeneration: number;
+  message: string;
+}) {
+  const { authorLower, novelId, expectedGeneration, message } = params;
+  const cur = await readPublishRecordFs(authorLower, novelId);
+  if (!cur || (cur.aiReflowGeneration ?? 0) !== expectedGeneration) return;
+  if (cur.aiReflowStatus !== "pending") return;
+  await writePublishRecordFs({
+    ...cur,
+    aiReflowStatus: "error",
+    aiReflowError: message.slice(0, 500),
+    aiReflowFinishedAt: new Date().toISOString(),
+  });
+}
+
+async function enqueueAiReflowOrFail(params: {
+  authorLower: string;
+  novelId: string;
+  chapterIds: string[];
+  expectedGeneration: number;
+}) {
+  try {
+    await enqueueAiReflowJob(params);
+  } catch (e) {
+    const msg =
+      e instanceof Error
+        ? e.message
+        : "排版任务入队失败（请确认 Redis 已启动且 REDIS_URL 正确，并已运行 worker）";
+    await markAiReflowEnqueueFailed({
+      authorLower: params.authorLower,
+      novelId: params.novelId,
+      expectedGeneration: params.expectedGeneration,
+      message: msg,
+    });
+    throw e;
+  }
 }
 
 /** 保存发布配置 或 action:withdraw */
@@ -268,42 +315,17 @@ export async function POST(req: NextRequest) {
 
   const action = o.action === "withdraw" ? "withdraw" : "publish";
 
-  if (o.action === "toggle_chapter") {
-    const chapterId = typeof o.chapterId === "string" ? o.chapterId.trim() : "";
-    if (!chapterId) return badRequest("Missing chapterId");
-    const publish = o.publish !== false;
-
-    const existing = await readPublishRecord(wh.walletLower, novelId);
+  if (o.action === "set_reader_style") {
+    const existing = await readPublishRecordFs(wh.walletLower, novelId);
     if (!existing) {
-      return badRequest("请先完成整本发布配置，再按章节发布");
+      return badRequest("请先保存发布配置，再设置段落样式");
     }
-    if (existing.visibility !== "public") {
-      return badRequest("当前作品未公开，无法按章节发布");
-    }
-
-    const layoutMode = normalizeLayoutMode(o.layoutMode ?? existing.layoutMode);
-
-    const current = new Set(parseChapterIds(existing.publishedChapterIds));
-    if (publish) {
-      if (layoutMode === "ai_reflow") {
-        await autoFormatChaptersForPublish({
-          authorLower: wh.walletLower,
-          novelId,
-          chapterIds: [chapterId],
-        });
-      }
-      current.add(chapterId);
-    } else {
-      current.delete(chapterId);
-    }
-
+    const firstLineIndent = normalizeFirstLineIndent(o.firstLineIndent);
     const next: NovelPublishRecord = {
       ...existing,
-      publishedChapterIds: Array.from(current),
-      layoutMode,
-      publishedAt: existing.publishedAt || new Date().toISOString(),
+      firstLineIndent,
     };
-    await writePublishRecord(next);
+    await writePublishRecordFs(next);
     try {
       await trackWalletEvent({
         wallet: wh.walletLower,
@@ -316,16 +338,100 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ record: next, ok: true });
   }
 
+  if (o.action === "toggle_chapter") {
+    const chapterId = typeof o.chapterId === "string" ? o.chapterId.trim() : "";
+    if (!chapterId) return badRequest("Missing chapterId");
+    const publish = o.publish !== false;
+
+    const existing = await readPublishRecordFs(wh.walletLower, novelId);
+    if (!existing) {
+      return badRequest("请先完成整本发布配置，再按章节发布");
+    }
+    if (existing.visibility !== "public") {
+      return badRequest("当前作品未公开，无法按章节发布");
+    }
+
+    const layoutMode = normalizeLayoutMode(o.layoutMode ?? existing.layoutMode);
+    const firstLineIndent = normalizeFirstLineIndent(
+      o.firstLineIndent ?? existing.firstLineIndent,
+    );
+
+    const current = new Set(parseChapterIds(existing.publishedChapterIds));
+    if (publish) {
+      current.add(chapterId);
+    } else {
+      current.delete(chapterId);
+    }
+
+    let next: NovelPublishRecord = {
+      ...existing,
+      publishedChapterIds: Array.from(current),
+      layoutMode,
+      firstLineIndent,
+      publishedAt: existing.publishedAt || new Date().toISOString(),
+    };
+    let aiReflowQueued = false;
+    let reflowGeneration = next.aiReflowGeneration ?? 0;
+
+    if (publish && layoutMode === "ai_reflow") {
+      const p = withPendingAiReflow(next, [chapterId]);
+      next = p.record;
+      reflowGeneration = p.generation;
+      aiReflowQueued = p.queued;
+    } else {
+      next = invalidateAiReflowFields(next);
+    }
+
+    await writePublishRecordFs(next);
+    if (aiReflowQueued) {
+      try {
+        await enqueueAiReflowOrFail({
+          authorLower: wh.walletLower,
+          novelId,
+          chapterIds: [chapterId],
+          expectedGeneration: reflowGeneration,
+        });
+      } catch (e) {
+        const fresh = await readPublishRecordFs(wh.walletLower, novelId);
+        return NextResponse.json(
+          {
+            ok: false,
+            aiReflowQueued: false,
+            record: fresh ?? next,
+            error:
+              e instanceof Error
+                ? e.message
+                : "AI 排版任务入队失败（请检查 Redis 是否启动、REDIS_URL 是否正确，以及是否运行 worker）",
+          },
+          { status: 503 },
+        );
+      }
+    }
+    try {
+      await trackWalletEvent({
+        wallet: wh.walletLower,
+        eventType: "publish_change",
+        meta: { novelId },
+      });
+    } catch {
+      // ignore analytics error
+    }
+    return NextResponse.json({ record: next, ok: true, aiReflowQueued });
+  }
+
   if (o.action === "publish_all_chapters") {
     const clientChapterIds = parseChapterIds(o.allChapterIds);
     if (clientChapterIds.length === 0) {
       return badRequest("Missing allChapterIds");
     }
-    const existing = await readPublishRecord(wh.walletLower, novelId);
+    const existing = await readPublishRecordFs(wh.walletLower, novelId);
     if (!existing) {
       return badRequest("请先完成整本发布配置，再按章节发布");
     }
     const layoutMode = normalizeLayoutMode(o.layoutMode ?? existing.layoutMode);
+    const firstLineIndent = normalizeFirstLineIndent(
+      o.firstLineIndent ?? existing.firstLineIndent,
+    );
     if (existing.visibility !== "public") {
       return badRequest("当前作品未公开，无法发布章节");
     }
@@ -335,20 +441,51 @@ export async function POST(req: NextRequest) {
       structureChapterIds.length > clientChapterIds.length
         ? structureChapterIds
         : clientChapterIds;
-    if (layoutMode === "ai_reflow") {
-      await autoFormatChaptersForPublish({
-        authorLower: wh.walletLower,
-        novelId,
-        chapterIds: allChapterIds,
-      });
-    }
-    const next: NovelPublishRecord = {
+
+    let next: NovelPublishRecord = {
       ...existing,
       publishedChapterIds: allChapterIds,
       layoutMode,
+      firstLineIndent,
       publishedAt: existing.publishedAt || new Date().toISOString(),
     };
-    await writePublishRecord(next);
+    let aiReflowQueued = false;
+    let reflowGeneration = next.aiReflowGeneration ?? 0;
+
+    if (layoutMode === "ai_reflow") {
+      const p = withPendingAiReflow(next, allChapterIds);
+      next = p.record;
+      reflowGeneration = p.generation;
+      aiReflowQueued = p.queued;
+    } else {
+      next = invalidateAiReflowFields(next);
+    }
+
+    await writePublishRecordFs(next);
+    if (aiReflowQueued) {
+      try {
+        await enqueueAiReflowOrFail({
+          authorLower: wh.walletLower,
+          novelId,
+          chapterIds: allChapterIds,
+          expectedGeneration: reflowGeneration,
+        });
+      } catch (e) {
+        const fresh = await readPublishRecordFs(wh.walletLower, novelId);
+        return NextResponse.json(
+          {
+            ok: false,
+            aiReflowQueued: false,
+            record: fresh ?? next,
+            error:
+              e instanceof Error
+                ? e.message
+                : "AI 排版任务入队失败（请检查 Redis 是否启动、REDIS_URL 是否正确，以及是否运行 worker）",
+          },
+          { status: 503 },
+        );
+      }
+    }
     try {
       await trackWalletEvent({
         wallet: wh.walletLower,
@@ -358,11 +495,11 @@ export async function POST(req: NextRequest) {
     } catch {
       // ignore analytics error
     }
-    return NextResponse.json({ record: next, ok: true });
+    return NextResponse.json({ record: next, ok: true, aiReflowQueued });
   }
 
   if (action === "withdraw") {
-    const existing = await readPublishRecord(wh.walletLower, novelId);
+    const existing = await readPublishRecordFs(wh.walletLower, novelId);
     if (!existing) {
       return badRequest("无可撤回的配置");
     }
@@ -371,7 +508,7 @@ export async function POST(req: NextRequest) {
         "仅「已公开 · 免费阅读」作品支持撤回至草稿；付费连载请通过客服处理。",
       );
     }
-    const next: NovelPublishRecord = {
+    let next: NovelPublishRecord = {
       ...existing,
       visibility: "private",
       paymentMode: "free",
@@ -381,7 +518,8 @@ export async function POST(req: NextRequest) {
       publishedAt: existing.publishedAt,
       articleId: existing.articleId,
     };
-    await writePublishRecord(next);
+    next = invalidateAiReflowFields(next);
+    await writePublishRecordFs(next);
     try {
       await trackWalletEvent({
         wallet: wh.walletLower,
@@ -442,14 +580,17 @@ export async function POST(req: NextRequest) {
   const allChapterIds = parseChapterIds(o.allChapterIds);
   const layoutMode = normalizeLayoutMode(o.layoutMode);
 
-  const existing = await readPublishRecord(wh.walletLower, novelId);
+  const existing = await readPublishRecordFs(wh.walletLower, novelId);
+  const firstLineIndent = normalizeFirstLineIndent(
+    o.firstLineIndent ?? existing?.firstLineIndent,
+  );
   const articleId = existing?.articleId ?? (await allocateArticleId());
   const publishedChapterIds =
     parseChapterIds(existing?.publishedChapterIds).length > 0
       ? parseChapterIds(existing?.publishedChapterIds)
       : allChapterIds;
 
-  const record: NovelPublishRecord = {
+  const recordBase: NovelPublishRecord = {
     articleId,
     authorId: wh.walletLower,
     novelId,
@@ -464,19 +605,52 @@ export async function POST(req: NextRequest) {
     refundRuleAck,
     publishedChapterIds,
     layoutMode,
+    firstLineIndent,
     publishedAt: new Date().toISOString(),
     withdrawnAt: null,
   };
 
-  if (visibility === "public" && layoutMode === "ai_reflow") {
-    await autoFormatChaptersForPublish({
-      authorLower: wh.walletLower,
-      novelId,
-      chapterIds: allChapterIds,
-    });
+  const needsAsyncReflow =
+    visibility === "public" && layoutMode === "ai_reflow" && allChapterIds.length > 0;
+
+  let record: NovelPublishRecord;
+  let aiReflowQueued = false;
+  let reflowGeneration = recordBase.aiReflowGeneration ?? 0;
+
+  if (needsAsyncReflow) {
+    const p = withPendingAiReflow(recordBase, allChapterIds);
+    record = p.record;
+    reflowGeneration = p.generation;
+    aiReflowQueued = p.queued;
+  } else {
+    record = invalidateAiReflowFields(recordBase);
   }
 
-  await writePublishRecord(record);
+  await writePublishRecordFs(record);
+  if (aiReflowQueued) {
+    try {
+      await enqueueAiReflowOrFail({
+        authorLower: wh.walletLower,
+        novelId,
+        chapterIds: allChapterIds,
+        expectedGeneration: reflowGeneration,
+      });
+    } catch (e) {
+      const fresh = await readPublishRecordFs(wh.walletLower, novelId);
+      return NextResponse.json(
+        {
+          ok: false,
+          aiReflowQueued: false,
+          record: fresh ?? record,
+          error:
+            e instanceof Error
+              ? e.message
+              : "AI 排版任务入队失败（请检查 Redis 是否启动、REDIS_URL 是否正确，以及是否运行 worker）",
+        },
+        { status: 503 },
+      );
+    }
+  }
   try {
     await trackWalletEvent({
       wallet: wh.walletLower,
@@ -486,5 +660,5 @@ export async function POST(req: NextRequest) {
   } catch {
     // ignore analytics error
   }
-  return NextResponse.json({ record, ok: true });
+  return NextResponse.json({ record, ok: true, aiReflowQueued });
 }

@@ -508,14 +508,17 @@ export default function ReaderArticlePage({
       );
     }
 
+    const qrCardBottomY = qrY + qrSize + 20;
+    const linkStartY = qrCardBottomY + 64;
     ctx.fillStyle = "#94a3b8";
     ctx.font = "24px sans-serif";
-    drawWrappedCenteredText(ctx, shareTargetUrl, 540, 1085, 860, 34);
+    const shareUrlLines = drawWrappedCenteredText(ctx, shareTargetUrl, 540, linkStartY, 860, 34);
 
     ctx.fillStyle = "#22d3ee";
     ctx.font = "24px sans-serif";
     const walletLabel = `分享读者钱包：${address ?? "未连接"}`;
-    drawWrappedCenteredText(ctx, walletLabel, 540, 1295, 860, 34);
+    const walletStartY = linkStartY + Math.max(1, shareUrlLines) * 34 + 74;
+    drawWrappedCenteredText(ctx, walletLabel, 540, walletStartY, 860, 34);
 
     const a = document.createElement("a");
     a.href = canvas.toDataURL("image/png");
@@ -1171,6 +1174,7 @@ function drawWrappedCenteredText(
   lines.forEach((l, i) => {
     ctx.fillText(l, centerX, startY + i * lineHeight);
   });
+  return lines.length;
 }
 
 function drawWrappedCenteredTextClamped(

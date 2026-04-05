@@ -69,6 +69,18 @@ type AuthorNovelIndex = {
   }>;
 };
 
+type AudiobookRecord = {
+  id?: string;
+  authorId?: string;
+  novelId?: string;
+  fileName?: string;
+  displayName?: string;
+  synopsis?: string;
+  details?: string;
+  url?: string;
+  updatedAt?: string;
+};
+
 function makeArticleId() {
   return `art_${crypto.randomBytes(5).toString("hex")}`;
 }
@@ -119,6 +131,25 @@ async function readPublishRecords() {
     }
   }
   return records;
+}
+
+async function readAudiobookRecords() {
+  const dir = path.join(process.cwd(), ".data", "audiobooks", "authors");
+  const files = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const out: AudiobookRecord[] = [];
+  for (const file of files) {
+    if (!file.isFile() || !file.name.endsWith(".json")) continue;
+    const filePath = path.join(dir, file.name);
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw) as { items?: AudiobookRecord[] };
+      if (!Array.isArray(parsed.items)) continue;
+      for (const row of parsed.items) out.push(row);
+    } catch {
+      // ignore invalid files
+    }
+  }
+  return out;
 }
 
 async function readNovelTitle(authorId: string, novelId: string): Promise<string | null> {
@@ -538,7 +569,34 @@ export async function GET(req: NextRequest) {
         return out;
       }),
     );
-    const items = groupedItems.flat();
+    const novelItems = groupedItems.flat().map((x) => ({ ...x, kind: "novel" as const }));
+    const audiobookRows = await readAudiobookRecords();
+    const audiobookItems = audiobookRows
+      .map((row) => {
+        const id = typeof row.id === "string" ? row.id.trim() : "";
+        const url = typeof row.url === "string" ? row.url.trim() : "";
+        if (!id || !url) return null;
+        const titleCandidate =
+          (typeof row.displayName === "string" && row.displayName.trim()) ||
+          (typeof row.fileName === "string" && row.fileName.trim()) ||
+          "未命名有声书";
+        const synopsis = typeof row.synopsis === "string" ? row.synopsis.trim() : "";
+        const details = typeof row.details === "string" ? row.details.trim() : "";
+        const updatedAt = typeof row.updatedAt === "string" ? row.updatedAt : "";
+        return {
+          kind: "audiobook" as const,
+          articleId: `abk_${id}`,
+          title: titleCandidate.slice(0, 160),
+          synopsis: synopsis || details.slice(0, 220),
+          publishedAt: updatedAt,
+          language: "zh",
+          languageLabel: "有声书",
+          audioUrl: url,
+          details: details.slice(0, 500),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => Boolean(x));
+    const items = [...novelItems, ...audiobookItems];
     items.sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1));
     return NextResponse.json({ items });
   }

@@ -40,6 +40,12 @@ import {
   type NovelPublishRecord,
 } from "@/lib/novel-publish";
 import { plainTextToTipTapHtml } from "@/lib/manuscript-txt";
+import { makePlotNodeId } from "@/lib/plot-nodes-from-chapters";
+import {
+  chapterizeTxtViaApi,
+  decodeTxtAuto,
+  type ChapterizeTxtMode,
+} from "@/lib/txt-import-chapterize";
 import { resolveParentForNewChapter } from "@/lib/plot-outline";
 import { createEmptyPersona } from "@/lib/persona-factory";
 import {
@@ -73,35 +79,6 @@ function scheduleAiReflowBackgroundNotify(startWatch: () => void) {
   }, 0);
 }
 
-function decodeTxtAuto(bytes: Uint8Array): string {
-  if (bytes.length === 0) return "";
-
-  // BOM 优先：UTF-8 / UTF-16LE / UTF-16BE
-  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
-    return new TextDecoder("utf-8").decode(bytes.subarray(3));
-  }
-  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
-    return new TextDecoder("utf-16le").decode(bytes.subarray(2));
-  }
-  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
-    // 浏览器通常不直接提供 utf-16be，手动调换字节后按 utf-16le 解码
-    const be = bytes.subarray(2);
-    const swapped = new Uint8Array(be.length - (be.length % 2));
-    for (let i = 0; i + 1 < be.length; i += 2) {
-      swapped[i] = be[i + 1];
-      swapped[i + 1] = be[i];
-    }
-    return new TextDecoder("utf-16le").decode(swapped);
-  }
-
-  // 先严格按 UTF-8 解；失败后回退到 GB18030（覆盖 GBK/GB2312）
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return new TextDecoder("gb18030").decode(bytes);
-  }
-}
-
 function createDefaultChapterOneNodes(): PlotNode[] {
   return [
     {
@@ -128,7 +105,7 @@ const CHAPTER_CN_TO_NUM: Record<string, number> = {
 
 const MARKDOWN_EDITOR_POPUP_MESSAGE_TYPE = "chenchen:markdown-editor-publish";
 const TRANSLATION_EDITOR_SESSION_PREFIX = "translation-editor-pair:";
-type ChapterizeMode = "auto" | "rule" | "llm";
+type ChapterizeMode = ChapterizeTxtMode;
 const WORKSPACE_RESUME_PREFIX = "chenchen:workspace:resume:";
 type ManageTab = "personas" | "outline" | "finance";
 type WorkspaceResumeState = {
@@ -190,13 +167,6 @@ function chapterNoLabel(n: number): string {
 
 function buildChapterTitle(n: number): string {
   return `第${chapterNoLabel(n)}章`;
-}
-
-function makePlotNodeId(prefix: string): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function copyText(text: string) {
@@ -2624,9 +2594,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         !window.confirm(
           chapterizeMode === "rule"
             ? "将按本地规则快速切章，此操作会覆盖当前章节结构和稿面内容。是否继续？"
-            : chapterizeMode === "llm"
-              ? "将调用豆包智能切章，此操作会覆盖当前章节结构和稿面内容。是否继续？"
-              : "将自动选择切章策略（优先本地规则，必要时调用豆包），此操作会覆盖当前章节结构和稿面内容。是否继续？",
+            : "将按规则自动切章（中英文章节标题正则识别），此操作会覆盖当前章节结构和稿面内容。是否继续？",
         )
       ) {
         return;
@@ -2643,21 +2611,11 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         void (async () => {
           setAiChapterizing(true);
           try {
-            const r = await fetch("/api/v1/ai/chapterize", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text, mode: chapterizeMode }),
-            });
-            const data = (await r.json()) as {
-              chapters?: Array<{ title: string; content: string }>;
-              error?: string;
-              usedFallback?: boolean;
-              engine?: "rule" | "llm" | "fallback";
-              truncated?: boolean;
-            };
-            if (!r.ok || !Array.isArray(data.chapters) || data.chapters.length === 0) {
-              throw new Error(data.error ?? "AI 切章失败");
-            }
+            const {
+              chapters: mergedChapters,
+              batchCount,
+              anyTruncated,
+            } = await chapterizeTxtViaApi(text, chapterizeMode);
 
             const volumeId = makePlotNodeId("plot-volume");
             const nextNodes: PlotNode[] = [
@@ -2667,7 +2625,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                 title: "",
                 summary: "",
               },
-              ...data.chapters.map((ch, idx) => ({
+              ...mergedChapters.map((ch, idx) => ({
                 id: makePlotNodeId("plot-chapter"),
                 kind: "chapter" as const,
                 title: (ch.title || "").trim() || `第${idx + 1}章`,
@@ -2731,18 +2689,14 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             setDocTick((t) => t + 1);
             flushWritingContext(editorInstance, firstChapter?.id ?? null);
 
-            if (data.engine === "rule") {
-              window.alert("已按本地规则完成切章。");
-            } else if (data.engine === "llm") {
-              window.alert("已按豆包智能切章完成导入。");
-            } else if (data.usedFallback || data.engine === "fallback") {
-              window.alert("豆包返回异常，已使用本地规则完成切章。");
-            }
-            if (data.truncated) {
+            window.alert(
+              `已按规则完成全量切章（共 ${mergedChapters.length} 章，分 ${batchCount} 批处理）。`,
+            );
+            if (anyTruncated) {
               window.alert("切章结果已触发章节数量上限（2000），仅保留前 2000 章。");
             }
           } catch (err) {
-            window.alert(err instanceof Error ? err.message : "AI 切章失败");
+            window.alert(err instanceof Error ? err.message : "切章失败");
           } finally {
             setAiChapterizing(false);
           }
@@ -3211,15 +3165,13 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                     : authorId
                   ? chapterizeMode === "rule"
                     ? "按本地规则快速切章（稳定、低延迟）"
-                    : chapterizeMode === "llm"
-                      ? "调用豆包智能切章（语义更强）"
-                      : "自动选择切章策略：有明显章节标记时走本地规则，否则调用豆包"
+                    : "按规则自动切章（支持中文/英文章节标题）"
                   : ""
               }
               className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1.5 text-xs font-medium text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FileUp className="h-3.5 w-3.5 shrink-0" aria-hidden />
-              {aiChapterizing ? "AI 切章中…" : "AI智能切章导入"}
+              {aiChapterizing ? "切章中…" : "正则切章导入"}
             </button>
             <label className="inline-flex items-center gap-1 text-[11px] text-neutral-600 dark:text-neutral-300">
               <span>切章模式</span>
@@ -3230,9 +3182,8 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
                 className="rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-800 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
                 title="选择切章策略"
               >
-                <option value="auto">自动（推荐）</option>
+                <option value="auto">自动（规则推荐）</option>
                 <option value="rule">快速切章（规则）</option>
-                <option value="llm">智能切章（豆包）</option>
               </select>
             </label>
             <button

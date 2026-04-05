@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { FileUp, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -8,6 +8,7 @@ import QRCode from "qrcode";
 
 import { WalletConnect } from "@/components/wallet-connect";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
+import { chapterizeTxtViaApi, decodeTxtAuto } from "@/lib/txt-import-chapterize";
 import {
   derivePublishDisplayStatus,
   publishStatusLabelZh,
@@ -27,6 +28,7 @@ type NovelListItem = {
 
 type Tab =
   | "novels"
+  | "audiobooks"
   | "publish"
   | "translation"
   | "analytics"
@@ -74,6 +76,33 @@ type TicketItem = {
   closedBy: string | null;
   adminNote: string;
 };
+
+type UploadedAudioItem = {
+  name: string;
+  url: string;
+  size: number;
+  mimeType: string;
+};
+
+type AudiobookItem = {
+  id: string;
+  authorId: string;
+  novelId: string;
+  fileName: string;
+  displayName: string;
+  synopsis?: string;
+  details?: string;
+  mimeType: string;
+  size: number;
+  pathParam: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type UnifiedWorkItem =
+  | { kind: "novel"; sortAt: string; novel: NovelListItem }
+  | { kind: "audiobook"; sortAt: string; audiobook: AudiobookItem };
 
 const VIDEO_MATERIALS: Array<{
   id: VideoMaterialId;
@@ -127,6 +156,10 @@ const TICKET_STATUS_LABELS_ZH: Record<TicketItem["status"], string> = {
   closed: "已关闭",
   ignored: "已忽略",
 };
+const AUDIO_ACCEPT =
+  ".mp3,.wav,.m4a,.aac,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/flac,audio/x-flac";
+
+const NOVEL_TXT_ACCEPT = ".txt,text/plain";
 
 function formatModified(iso: string) {
   try {
@@ -139,6 +172,18 @@ function formatModified(iso: string) {
   }
 }
 
+async function readApiJsonSafe<T extends Record<string, unknown>>(
+  res: Response,
+): Promise<T> {
+  const raw = await res.text();
+  if (!raw) return {} as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return { error: `接口返回非 JSON（HTTP ${res.status}）` } as unknown as T;
+  }
+}
+
 export function AuthorDashboard() {
   const router = useRouter();
   const {
@@ -147,7 +192,6 @@ export function AuthorDashboard() {
     status,
     requestConnect,
     isConnectPending,
-    connectors,
   } = useWeb3Auth();
 
   const [tab, setTab] = useState<Tab>("novels");
@@ -164,6 +208,13 @@ export function AuthorDashboard() {
   const [editDescription, setEditDescription] = useState("");
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [audiobookEditOpen, setAudiobookEditOpen] = useState(false);
+  const [editingAudiobookId, setEditingAudiobookId] = useState<string | null>(null);
+  const [audiobookEditTitle, setAudiobookEditTitle] = useState("");
+  const [audiobookEditSynopsis, setAudiobookEditSynopsis] = useState("");
+  const [audiobookEditDetails, setAudiobookEditDetails] = useState("");
+  const [audiobookEditSubmitting, setAudiobookEditSubmitting] = useState(false);
+  const [audiobookEditError, setAudiobookEditError] = useState<string | null>(null);
 
   /** 发布模块：工作台聚合列表 */
   const [publishRows, setPublishRows] = useState<
@@ -242,37 +293,30 @@ export function AuthorDashboard() {
   const [ticketImagePreviewUrls, setTicketImagePreviewUrls] = useState<string[]>([]);
   const [ticketUploadingImages, setTicketUploadingImages] = useState(false);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
+  const [audioUploading, setAudioUploading] = useState(false);
+  const [audioUploadProgress, setAudioUploadProgress] = useState(0);
+  const [audioUploadError, setAudioUploadError] = useState<string | null>(null);
+  const [uploadedAudios, setUploadedAudios] = useState<UploadedAudioItem[]>([]);
+  const [audiobooks, setAudiobooks] = useState<AudiobookItem[]>([]);
+  const [audiobooksLoading, setAudiobooksLoading] = useState(false);
+  const [audiobooksError, setAudiobooksError] = useState<string | null>(null);
+  const [audiobookNovelId, setAudiobookNovelId] = useState("");
+  const [renameInputById, setRenameInputById] = useState<Record<string, string>>({});
+  const [txtBatchImport, setTxtBatchImport] = useState<{
+    active: boolean;
+    done: number;
+    total: number;
+    failures: Array<{ name: string; error: string }>;
+  }>({ active: false, done: 0, total: 0, failures: [] });
 
-  const connectBootRef = useRef(false);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
+  const audioUploadXhrRef = useRef<XMLHttpRequest | null>(null);
+  const novelTxtInputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    if (isConnected) return;
-    if (
-      status === "reconnecting" ||
-      status === "connecting" ||
-      isConnectPending
-    )
-      return;
-    if (status !== "disconnected") return;
-    if (connectors.length === 0) return;
-    if (connectBootRef.current) return;
-    connectBootRef.current = true;
-    void requestConnect();
-  }, [isConnected, status, isConnectPending, requestConnect, connectors.length]);
-
-  useEffect(() => {
-    if (isConnected) return;
-    if (
-      status === "reconnecting" ||
-      status === "connecting" ||
-      isConnectPending
-    )
-      return;
-    const id = window.setTimeout(() => {
-      router.replace("/");
-    }, 30_000);
-    return () => window.clearTimeout(id);
-  }, [isConnected, status, isConnectPending, router]);
+  /**
+   * 不在此自动 requestConnect。刷新后由 wagmi（localStorage + reconnectOnMount）静默恢复会话，
+   * 避免每次 F5 都弹出 MetaMask。仅当用户点击「连接钱包」或首页主动连接时才唤起扩展。
+   */
 
   const loadNovels = useCallback(async () => {
     if (!address) return;
@@ -284,10 +328,10 @@ export function AuthorDashboard() {
           headers: { "x-wallet-address": address },
         },
       );
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         novels?: NovelListItem[];
         error?: string;
-      };
+      }>(res);
       if (!res.ok) throw new Error(data.error ?? "加载失败");
       setNovels(data.novels ?? []);
     } catch (e) {
@@ -306,14 +350,14 @@ export function AuthorDashboard() {
         `/api/v1/novel-publish?authorId=${encodeURIComponent(address)}`,
         { headers: { "x-wallet-address": address } },
       );
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         items?: {
           novelId: string;
           novelTitle: string;
           record: NovelPublishRecord | null;
         }[];
         error?: string;
-      };
+      }>(res);
       if (!res.ok) throw new Error(data.error ?? "加载失败");
       setPublishRows(data.items ?? []);
     } catch (e) {
@@ -334,11 +378,11 @@ export function AuthorDashboard() {
           headers: { "x-wallet-address": address },
         },
       );
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         preferredLanguages?: string[];
         defaultTargetLanguage?: string;
         error?: string;
-      };
+      }>(res);
       if (!res.ok) throw new Error(data.error ?? "加载翻译偏好失败");
       const preferred =
         data.preferredLanguages && data.preferredLanguages.length > 0
@@ -370,7 +414,7 @@ export function AuthorDashboard() {
             headers: { "x-wallet-address": address },
           },
         );
-        const data = (await res.json()) as {
+        const data = await readApiJsonSafe<{
           chapters?: Array<{
             id: string;
             title: string;
@@ -380,7 +424,7 @@ export function AuthorDashboard() {
           }>;
           hasDraft?: boolean;
           error?: string;
-        };
+        }>(res);
         if (!res.ok) throw new Error(data.error ?? "加载章节失败");
         const chapters = (data.chapters ?? []).map((x) => ({
           ...x,
@@ -410,9 +454,11 @@ export function AuthorDashboard() {
         `/api/v1/analytics/active-wallets?range=${encodeURIComponent(analyticsRange)}&groupBy=day&tz=${encodeURIComponent("Asia/Shanghai")}`,
         { cache: "no-store" },
       );
-      const data = (await res.json()) as ActiveWalletAnalytics & {
+      const data = await readApiJsonSafe<
+        ActiveWalletAnalytics & {
         error?: string;
-      };
+        }
+      >(res);
       if (!res.ok) throw new Error(data.error ?? "加载活跃钱包数据失败");
       setAnalyticsData(data);
     } catch (e) {
@@ -431,11 +477,11 @@ export function AuthorDashboard() {
       const res = await fetch("/api/v1/tickets", {
         headers: { "x-wallet-address": address },
       });
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         items?: TicketItem[];
         isAdmin?: boolean;
         error?: string;
-      };
+      }>(res);
       if (!res.ok) throw new Error(data.error ?? "加载工单失败");
       setTickets(data.items ?? []);
       setTicketIsAdmin(data.isAdmin === true);
@@ -448,9 +494,39 @@ export function AuthorDashboard() {
     }
   }, [address]);
 
+  const loadAudiobooks = useCallback(async () => {
+    if (!address) return;
+    setAudiobooksLoading(true);
+    setAudiobooksError(null);
+    try {
+      const res = await fetch(
+        `/api/v1/audiobooks?authorId=${encodeURIComponent(address)}`,
+        {
+          headers: { "x-wallet-address": address },
+          cache: "no-store",
+        },
+      );
+      const data = await readApiJsonSafe<{
+        items?: AudiobookItem[];
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error ?? "加载有声书失败");
+      setAudiobooks(data.items ?? []);
+    } catch (e) {
+      setAudiobooks([]);
+      setAudiobooksError(e instanceof Error ? e.message : "加载有声书失败");
+    } finally {
+      setAudiobooksLoading(false);
+    }
+  }, [address]);
+
   useEffect(() => {
     if (tab === "novels" && address) void loadNovels();
   }, [tab, address, loadNovels]);
+
+  useEffect(() => {
+    if (tab === "novels" && address) void loadAudiobooks();
+  }, [tab, address, loadAudiobooks]);
 
   useEffect(() => {
     if ((tab === "publish" || tab === "translation") && address) {
@@ -536,6 +612,20 @@ export function AuthorDashboard() {
     setEditOpen(false);
   };
 
+  const openAudiobookEditModal = (item: AudiobookItem) => {
+    setEditingAudiobookId(item.id);
+    setAudiobookEditTitle(item.displayName || item.fileName || "");
+    setAudiobookEditSynopsis(item.synopsis ?? "");
+    setAudiobookEditDetails(item.details ?? "");
+    setAudiobookEditError(null);
+    setAudiobookEditOpen(true);
+  };
+
+  const closeAudiobookEditModal = () => {
+    if (audiobookEditSubmitting) return;
+    setAudiobookEditOpen(false);
+  };
+
   const handleSaveEdit = async () => {
     if (!address || !editingNovelId) return;
     const t = editTitle.trim();
@@ -559,10 +649,10 @@ export function AuthorDashboard() {
           description: editDescription.trim(),
         }),
       });
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         novel?: NovelListItem;
         error?: string;
-      };
+      }>(res);
       if (!res.ok || !data.novel) {
         throw new Error(data.error ?? "保存失败");
       }
@@ -574,6 +664,41 @@ export function AuthorDashboard() {
       setEditError(e instanceof Error ? e.message : "保存失败");
     } finally {
       setEditSubmitting(false);
+    }
+  };
+
+  const handleSaveAudiobookEdit = async () => {
+    if (!address || !editingAudiobookId) return;
+    const title = audiobookEditTitle.trim();
+    if (!title) {
+      setAudiobookEditError("请填写有声书标题");
+      return;
+    }
+    setAudiobookEditSubmitting(true);
+    setAudiobookEditError(null);
+    try {
+      const res = await fetch("/api/v1/audiobooks", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-wallet-address": address,
+        },
+        body: JSON.stringify({
+          authorId: address,
+          id: editingAudiobookId,
+          title,
+          synopsis: audiobookEditSynopsis,
+          details: audiobookEditDetails,
+        }),
+      });
+      const data = await readApiJsonSafe<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error ?? "保存失败");
+      await loadAudiobooks();
+      setAudiobookEditOpen(false);
+    } catch (e) {
+      setAudiobookEditError(e instanceof Error ? e.message : "保存失败");
+    } finally {
+      setAudiobookEditSubmitting(false);
     }
   };
 
@@ -599,10 +724,10 @@ export function AuthorDashboard() {
           description: description.trim(),
         }),
       });
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         novel?: NovelListItem;
         error?: string;
-      };
+      }>(res);
       if (!res.ok) throw new Error(data.error ?? "创建失败");
       if (!data.novel?.id) throw new Error("未返回小说 ID");
       setModalOpen(false);
@@ -613,6 +738,109 @@ export function AuthorDashboard() {
       setSubmitting(false);
     }
   };
+
+  const runSingleTxtImport = useCallback(
+    async (file: File, wallet: string) => {
+      const buf = await file.arrayBuffer();
+      const text = decodeTxtAuto(new Uint8Array(buf));
+      const baseTitle =
+        file.name.replace(/\.txt$/i, "").trim().slice(0, 500) || "未命名作品";
+      /** 浏览器内多段调 chapterize，再一次性落库，避免单请求在服务端切章过久被反代 RST */
+      const { chapters, batchCount, anyTruncated } = await chapterizeTxtViaApi(
+        text,
+        "auto",
+      );
+      const importRes = await fetch("/api/v1/novels/from-chapters", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-wallet-address": wallet,
+        },
+        body: JSON.stringify({
+          authorId: wallet,
+          title: baseTitle,
+          description: "",
+          chapters,
+          batchCount,
+          anyTruncated,
+        }),
+      });
+      const importData = await readApiJsonSafe<{
+        novel?: NovelListItem;
+        error?: string;
+        chapterCount?: number;
+      }>(importRes);
+      if (!importRes.ok || !importData.novel?.id) {
+        throw new Error(
+          importData.error ??
+            `导入失败（HTTP ${importRes.status}），请稍后再试。`,
+        );
+      }
+      return importData.novel;
+    },
+    [],
+  );
+
+  const handleNovelTxtBatchSelected = useCallback(
+    async (files: FileList | null) => {
+      if (!address || !files || files.length === 0) return;
+      const all = Array.from(files);
+      const txtList = all.filter((f) => f.name.toLowerCase().endsWith(".txt"));
+      const skipped = all.length - txtList.length;
+      if (txtList.length === 0) {
+        window.alert("请选择至少一个 .txt 文件。");
+        return;
+      }
+      if (
+        !window.confirm(
+          `将新建 ${txtList.length} 部小说：本页会分批请求切章（短连接），再保存大纲与首章稿面，避免单次上传超时断开。可继续浏览本页，完成后在下方列表查看${skipped > 0 ? `；已忽略 ${skipped} 个非 .txt 文件` : ""}。是否继续？`,
+        )
+      ) {
+        return;
+      }
+
+      setTxtBatchImport({
+        active: true,
+        done: 0,
+        total: txtList.length,
+        failures: [],
+      });
+
+      const failures: Array<{ name: string; error: string }> = [];
+
+      for (let i = 0; i < txtList.length; i += 1) {
+        const file = txtList[i]!;
+        try {
+          await runSingleTxtImport(file, address);
+        } catch (e) {
+          failures.push({
+            name: file.name,
+            error: e instanceof Error ? e.message : "导入失败",
+          });
+        }
+        setTxtBatchImport((prev) => ({
+          ...prev,
+          done: i + 1,
+          failures: [...failures],
+        }));
+        void loadNovels();
+      }
+
+      setTxtBatchImport((prev) => ({
+        ...prev,
+        active: false,
+        failures: [...failures],
+      }));
+      void loadNovels();
+
+      if (failures.length > 0) {
+        window.alert(
+          `批量导入结束：成功 ${txtList.length - failures.length} 部，失败 ${failures.length} 部。失败原因见卡片下方列表。`,
+        );
+      }
+    },
+    [address, loadNovels, runSingleTxtImport],
+  );
 
   const openShareModal = (row: {
     novelTitle: string;
@@ -662,7 +890,7 @@ export function AuthorDashboard() {
           novelId: row.novelId,
         }),
       });
-      const data = (await res.json()) as { snippet?: string; error?: string };
+      const data = await readApiJsonSafe<{ snippet?: string; error?: string }>(res);
       if (!res.ok) throw new Error(data.error ?? "加载片段失败");
       const fallback = (row.record?.synopsis ?? row.novelTitle).slice(0, 300);
       const prefill = (data.snippet ?? fallback).trim().slice(0, 300);
@@ -767,11 +995,11 @@ export function AuthorDashboard() {
           defaultTargetLanguage: defaultTranslationLanguage,
         }),
       });
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         preferredLanguages?: string[];
         defaultTargetLanguage?: string;
         error?: string;
-      };
+      }>(res);
       if (!res.ok) throw new Error(data.error ?? "保存失败");
       const preferred =
         data.preferredLanguages && data.preferredLanguages.length > 0
@@ -829,12 +1057,12 @@ export function AuthorDashboard() {
           text: translationSourceMode === "manual" ? translationManualText : undefined,
         }),
       });
-      const data = (await res.json()) as {
+      const data = await readApiJsonSafe<{
         sourceText?: string;
         translatedText?: string;
         model?: string;
         error?: string;
-      };
+      }>(res);
       if (!res.ok) throw new Error(data.error ?? "翻译失败");
       setTranslationSourcePreview((data.sourceText ?? "").slice(0, 120));
       const sourceText = data.sourceText ?? "";
@@ -897,6 +1125,22 @@ export function AuthorDashboard() {
   const translationCompareArticleId =
     translationSelectedPublishRow?.record?.articleId?.trim() ?? "";
 
+  const unifiedWorkItems = useMemo<UnifiedWorkItem[]>(() => {
+    const novelItems: UnifiedWorkItem[] = novels.map((novel) => ({
+      kind: "novel",
+      sortAt: novel.lastModified || novel.updatedAt || "",
+      novel,
+    }));
+    const audiobookItems: UnifiedWorkItem[] = audiobooks.map((audiobook) => ({
+      kind: "audiobook",
+      sortAt: audiobook.updatedAt || audiobook.createdAt || "",
+      audiobook,
+    }));
+    return [...novelItems, ...audiobookItems].sort((a, b) =>
+      b.sortAt.localeCompare(a.sortAt),
+    );
+  }, [novels, audiobooks]);
+
   useEffect(() => {
     return () => {
       for (const u of ticketImagePreviewUrls) {
@@ -935,10 +1179,10 @@ export function AuthorDashboard() {
       },
       body: form,
     });
-    const data = (await res.json()) as {
+    const data = await readApiJsonSafe<{
       items?: Array<{ url?: string }>;
       error?: string;
-    };
+    }>(res);
     if (!res.ok) throw new Error(data.error ?? "上传工单图片失败");
     return (data.items ?? [])
       .map((x) => (typeof x.url === "string" ? x.url : ""))
@@ -972,7 +1216,7 @@ export function AuthorDashboard() {
         },
         body: JSON.stringify({ title, content, imageUrls }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await readApiJsonSafe<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error ?? "提交工单失败");
       setTicketTitle("");
       setTicketContent("");
@@ -986,6 +1230,136 @@ export function AuthorDashboard() {
       setTicketSubmitting(false);
     }
   };
+
+  const handleUploadAudiobookFiles = useCallback(
+    async (list: FileList | null) => {
+      if (!address || !list || list.length === 0 || audioUploading) return;
+      const files = Array.from(list);
+      const allowedExt = new Set(["mp3", "wav", "m4a", "aac", "ogg", "flac"]);
+      const invalid = files.find((f) => {
+        const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+        const mime = (f.type || "").toLowerCase();
+        if (mime.startsWith("audio/")) return false;
+        return !allowedExt.has(ext);
+      });
+      if (invalid) {
+        setAudioUploadError(`不支持的音频格式：${invalid.name}`);
+        return;
+      }
+
+      setAudioUploading(true);
+      setAudioUploadProgress(0);
+      setAudioUploadError(null);
+      try {
+        const uploadOnce = async (url: string) => {
+          const form = new FormData();
+          form.append("authorId", address);
+          form.append("novelId", audiobookNovelId);
+          for (const f of files) {
+            form.append("files", f);
+          }
+          const data = await new Promise<{ items?: UploadedAudioItem[]; error?: string }>(
+            (resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              audioUploadXhrRef.current = xhr;
+              xhr.open("POST", url);
+              xhr.setRequestHeader("x-wallet-address", address);
+              xhr.upload.onprogress = (event) => {
+                if (!event.lengthComputable || event.total <= 0) return;
+                const percent = Math.min(
+                  100,
+                  Math.max(0, Math.round((event.loaded / event.total) * 100)),
+                );
+                setAudioUploadProgress(percent);
+              };
+              xhr.onerror = () => reject(new Error("网络异常，音频上传失败"));
+              xhr.onabort = () => reject(new Error("已取消上传"));
+              xhr.onload = () => {
+                if (audioUploadXhrRef.current === xhr) {
+                  audioUploadXhrRef.current = null;
+                }
+                const raw = xhr.responseText ?? "";
+                let parsed: { items?: UploadedAudioItem[]; error?: string } = {};
+                if (raw.trim()) {
+                  try {
+                    parsed = JSON.parse(raw) as {
+                      items?: UploadedAudioItem[];
+                      error?: string;
+                    };
+                  } catch {
+                    // Keep parsed as empty object; error will be based on HTTP status.
+                  }
+                }
+                if (xhr.status < 200 || xhr.status >= 300) {
+                  reject(
+                    new Error(
+                      parsed.error ?? `音频上传失败（${url}，HTTP ${xhr.status}）`,
+                    ),
+                  );
+                  return;
+                }
+                resolve(parsed);
+              };
+              xhr.send(form);
+            },
+          );
+          return data;
+        };
+
+        let data: { items?: Array<Record<string, unknown>>; error?: string };
+        try {
+          data = await uploadOnce("/api/v1/audiobooks");
+        } catch (e) {
+          const message = e instanceof Error ? e.message : "";
+          if (message.includes("HTTP 404")) {
+            data = await uploadOnce("/api/v1/audio-host");
+          } else {
+            throw e;
+          }
+        }
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (items.length === 0) throw new Error("未返回可用音频链接");
+        const normalized: UploadedAudioItem[] = items
+          .map((x) => {
+            const url = typeof x.url === "string" ? x.url : "";
+            const name =
+              typeof x.name === "string"
+                ? x.name
+                : typeof x.fileName === "string"
+                  ? x.fileName
+                  : "";
+            if (!url || !name) return null;
+            return {
+              name,
+              url,
+              size: typeof x.size === "number" ? x.size : 0,
+              mimeType: typeof x.mimeType === "string" ? x.mimeType : "",
+            };
+          })
+          .filter((x): x is UploadedAudioItem => Boolean(x));
+        setUploadedAudios((prev) => [...normalized, ...prev].slice(0, 24));
+        await loadAudiobooks();
+        setAudioUploadProgress(100);
+      } catch (e) {
+        setAudioUploadError(e instanceof Error ? e.message : "音频上传失败");
+        setAudioUploadProgress(0);
+      } finally {
+        audioUploadXhrRef.current = null;
+        setAudioUploading(false);
+      }
+    },
+    [address, audioUploading, audiobookNovelId, loadAudiobooks],
+  );
+
+  const handleCancelAudiobookUpload = useCallback(() => {
+    const xhr = audioUploadXhrRef.current;
+    if (!xhr || !audioUploading) return;
+    xhr.abort();
+    audioUploadXhrRef.current = null;
+    setAudioUploading(false);
+    setAudioUploadProgress(0);
+    setAudioUploadError("已取消上传");
+  }, [audioUploading]);
 
   const handleUpdateTicketStatus = async (
     ticketId: string,
@@ -1002,7 +1376,7 @@ export function AuthorDashboard() {
         },
         body: JSON.stringify({ status }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await readApiJsonSafe<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error ?? "更新工单状态失败");
       await loadTickets();
     } catch (e) {
@@ -1129,7 +1503,7 @@ export function AuthorDashboard() {
           使用工作台需要先连接钱包
         </p>
         <p className="max-w-md text-xs text-neutral-500 dark:text-neutral-400">
-          已尝试唤起钱包；你也可以手动发起连接，或返回首页。
+          若本机曾连接过，刷新后会自动恢复会话（无需重复弹窗）。首次使用或恢复失败时，请点击下方按钮连接。
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <button
@@ -1147,9 +1521,6 @@ export function AuthorDashboard() {
             返回首页
           </Link>
         </div>
-        <p className="text-xs text-neutral-400 dark:text-neutral-500">
-          若约 30 秒内仍未连接，将自动返回首页
-        </p>
       </div>
     );
   }
@@ -1230,67 +1601,248 @@ export function AuthorDashboard() {
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
         {tab === "novels" && (
           <div className="space-y-8">
-            <button
-              type="button"
-              onClick={openModal}
-              className="flex w-full max-w-md cursor-pointer flex-col items-start gap-2 rounded-2xl border-2 border-dashed border-neutral-300 bg-neutral-50 p-8 text-left transition hover:border-cyan-500/60 hover:bg-cyan-50/50 dark:border-neutral-600 dark:bg-neutral-900/50 dark:hover:border-cyan-400/50 dark:hover:bg-cyan-950/20"
-            >
-              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100">
-                <Plus className="h-6 w-6" aria-hidden />
-              </span>
-              <span className="text-lg font-semibold">新建小说</span>
-              <span className="text-sm text-neutral-600 dark:text-neutral-400">
-                创建一部新作品，填写标题与简介后即可进入编辑器
-              </span>
-            </button>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="flex w-full flex-col items-start gap-3 rounded-2xl border-2 border-dashed border-neutral-300 bg-neutral-50 p-8 text-left transition dark:border-neutral-600 dark:bg-neutral-900/50">
+                <button
+                  type="button"
+                  onClick={openModal}
+                  className="flex w-full cursor-pointer flex-col items-start gap-2 text-left transition hover:opacity-90"
+                >
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100">
+                    <Plus className="h-6 w-6" aria-hidden />
+                  </span>
+                  <span className="text-lg font-semibold">新建小说</span>
+                  <span className="text-sm text-neutral-600 dark:text-neutral-400">
+                    创建一部新作品，填写标题与简介后即可进入编辑器
+                  </span>
+                </button>
+
+                <div className="w-full border-t border-neutral-200 pt-4 dark:border-neutral-700">
+                  <p className="mb-2 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                    从 .txt 批量新建（静默后台切章）
+                  </p>
+                  <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
+                    可多选 .txt：每份自动新建作品、正则切章并保存大纲与首章稿面；处理期间可继续浏览本页，完成后在下方「全部作品」查看。
+                  </p>
+                  <input
+                    ref={novelTxtInputRef}
+                    type="file"
+                    accept={NOVEL_TXT_ACCEPT}
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      void handleNovelTxtBatchSelected(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => novelTxtInputRef.current?.click()}
+                    disabled={txtBatchImport.active}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-white/80 px-3 py-1.5 text-xs font-medium text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-cyan-500/40 dark:bg-cyan-950/30 dark:text-cyan-200 dark:hover:bg-cyan-950/50"
+                  >
+                    <FileUp className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    {txtBatchImport.active
+                      ? `后台处理中 ${txtBatchImport.done}/${txtBatchImport.total}…`
+                      : "选择 .txt（可多选）"}
+                  </button>
+                  {txtBatchImport.active && txtBatchImport.total > 0 ? (
+                    <div className="mt-2 w-full">
+                      <div className="mb-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                        切章与保存均在后台顺序执行，请勿关闭页面直至进度走完
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+                        <div
+                          className="h-full bg-cyan-500 transition-[width] duration-300 dark:bg-cyan-400"
+                          style={{
+                            width: `${Math.min(100, Math.round((txtBatchImport.done / txtBatchImport.total) * 100))}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                  {txtBatchImport.failures.length > 0 ? (
+                    <ul className="mt-2 max-h-28 w-full space-y-1 overflow-y-auto rounded border border-rose-200/60 bg-rose-50/50 p-2 text-[11px] text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-200">
+                      {txtBatchImport.failures.map((f, idx) => (
+                        <li key={`${idx}-${f.name}`} className="break-words">
+                          <span className="font-medium">{f.name}</span>：{f.error}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="flex w-full flex-col items-start gap-3 rounded-2xl border-2 border-dashed border-violet-400/40 bg-violet-50/40 p-8 text-left transition dark:bg-violet-950/20">
+                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-200 text-violet-900 dark:bg-violet-900/60 dark:text-violet-100">
+                  <Plus className="h-6 w-6" aria-hidden />
+                </span>
+                <span className="text-lg font-semibold">新建有声书</span>
+                <span className="text-sm text-neutral-600 dark:text-neutral-400">
+                  上传音频文件创建有声书素材（支持 MP3/WAV/M4A/AAC/OGG/FLAC）
+                </span>
+                <input
+                  ref={audioInputRef}
+                  type="file"
+                  accept={AUDIO_ACCEPT}
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    void handleUploadAudiobookFiles(e.currentTarget.files);
+                    e.currentTarget.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => audioInputRef.current?.click()}
+                  disabled={audioUploading}
+                  className="rounded-lg border border-violet-500/50 px-3 py-1.5 text-xs font-medium text-violet-300 hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {audioUploading ? "上传中…" : "选择并上传音频"}
+                </button>
+                {audioUploading ? (
+                  <button
+                    type="button"
+                    onClick={handleCancelAudiobookUpload}
+                    className="rounded-lg border border-rose-500/50 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
+                  >
+                    取消上传
+                  </button>
+                ) : null}
+                {audioUploading || audioUploadProgress > 0 ? (
+                  <div className="w-full">
+                    <div className="mb-1 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
+                      <span>上传进度</span>
+                      <span>{audioUploadProgress}%</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-violet-200/50 dark:bg-violet-900/40">
+                      <div
+                        className="h-full bg-gradient-to-r from-violet-400 to-fuchsia-500 transition-all"
+                        style={{ width: `${audioUploadProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {audioUploadError ? (
+                  <p className="text-xs text-red-500 dark:text-red-400">{audioUploadError}</p>
+                ) : null}
+                {uploadedAudios.length > 0 ? (
+                  <ul className="max-h-28 w-full space-y-1 overflow-y-auto text-xs text-zinc-500 dark:text-zinc-400">
+                    {uploadedAudios.slice(0, 6).map((item) => (
+                      <li key={`${item.url}-${item.name}`} className="truncate">
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-violet-300 underline underline-offset-2 hover:text-violet-200"
+                          title={item.name}
+                        >
+                          {item.name}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            </div>
 
             <section>
               <h2 className="mb-3 text-sm font-medium text-neutral-500 dark:text-neutral-400">
                 全部作品
               </h2>
-              {loadingList ? (
+              {loadingList || audiobooksLoading ? (
                 <p className="text-sm text-neutral-500">加载中…</p>
-              ) : novels.length === 0 ? (
+              ) : unifiedWorkItems.length === 0 ? (
                 <p className="text-sm text-neutral-500">
-                  暂无小说，点击上方卡片开始创作。
+                  暂无作品，可新建小说（含 .txt 批量导入）、或上传有声书。
                 </p>
+              ) : audiobooksError ? (
+                <p className="text-sm text-rose-500 dark:text-rose-400">{audiobooksError}</p>
               ) : (
                 <ul className="space-y-2">
-                  {novels.map((n) => (
-                    <li key={n.id}>
-                      <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-950 dark:hover:border-neutral-500">
-                        <div className="flex flex-wrap items-baseline justify-between gap-2">
-                          <Link
-                            href={`/editor/${encodeURIComponent(n.id)}`}
-                            className="font-medium hover:underline"
-                          >
-                            {n.title}
-                          </Link>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                              {n.wordCount.toLocaleString("zh-CN")} 字
-                              <span className="mx-1.5 text-neutral-300 dark:text-neutral-600">
-                                ·
+                  {unifiedWorkItems.map((entry) =>
+                    entry.kind === "novel" ? (
+                      <li key={`novel-${entry.novel.id}`}>
+                        <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-950 dark:hover:border-neutral-500">
+                          <div className="flex flex-wrap items-baseline justify-between gap-2">
+                            <Link
+                              href={`/editor/${encodeURIComponent(entry.novel.id)}`}
+                              className="font-medium hover:underline"
+                            >
+                              {entry.novel.title}
+                            </Link>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                                {entry.novel.wordCount.toLocaleString("zh-CN")} 字
+                                <span className="mx-1.5 text-neutral-300 dark:text-neutral-600">
+                                  ·
+                                </span>
+                                最后修改 {formatModified(entry.novel.lastModified)}
                               </span>
-                              最后修改 {formatModified(n.lastModified)}
+                              <button
+                                type="button"
+                                onClick={() => openEditModal(entry.novel)}
+                                className="rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                              >
+                                编辑
+                              </button>
+                            </div>
+                          </div>
+                          {entry.novel.description ? (
+                            <p className="mt-1 line-clamp-2 text-xs text-neutral-500 dark:text-neutral-400">
+                              {entry.novel.description}
+                            </p>
+                          ) : null}
+                        </div>
+                      </li>
+                    ) : (
+                      <li key={`audiobook-${entry.audiobook.id}`}>
+                        <div className="rounded-xl border border-violet-300/50 bg-violet-50/40 px-4 py-3 transition dark:border-violet-700/60 dark:bg-violet-950/20">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p
+                              className="max-w-[70%] truncate text-sm font-medium text-violet-900 dark:text-violet-200"
+                              title={entry.audiobook.displayName || entry.audiobook.fileName}
+                            >
+                              {entry.audiobook.displayName || entry.audiobook.fileName}
+                            </p>
+                            <span className="text-xs text-violet-700 dark:text-violet-300">
+                              有声书
                             </span>
+                          </div>
+                          <div className="mt-1">
                             <button
                               type="button"
-                              onClick={() => openEditModal(n)}
-                              className="rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                              onClick={() => openAudiobookEditModal(entry.audiobook)}
+                              className="rounded-md border border-violet-500/50 px-2 py-0.5 text-[11px] text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
                             >
                               编辑
                             </button>
                           </div>
-                        </div>
-                        {n.description ? (
-                          <p className="mt-1 line-clamp-2 text-xs text-neutral-500 dark:text-neutral-400">
-                            {n.description}
+                          <p className="mt-1 truncate text-xs text-neutral-600 dark:text-neutral-400">
+                            归档小说：
+                            {entry.audiobook.novelId
+                              ? novels.find((n) => n.id === entry.audiobook.novelId)?.title ??
+                                entry.audiobook.novelId
+                              : "未归档"}
                           </p>
-                        ) : null}
-                      </div>
-                    </li>
-                  ))}
+                          {(entry.audiobook.synopsis ?? "").trim() ? (
+                            <p className="mt-1 line-clamp-2 text-xs text-neutral-600 dark:text-neutral-300">
+                              简介：{entry.audiobook.synopsis}
+                            </p>
+                          ) : null}
+                          {(entry.audiobook.details ?? "").trim() ? (
+                            <p className="mt-1 line-clamp-2 text-xs text-neutral-500 dark:text-neutral-400">
+                              详情：{entry.audiobook.details}
+                            </p>
+                          ) : null}
+                          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                            上传时间：{formatModified(entry.audiobook.updatedAt)}
+                          </p>
+                          <audio controls src={entry.audiobook.url} className="mt-2 w-full" />
+                        </div>
+                      </li>
+                    ),
+                  )}
                 </ul>
               )}
             </section>
@@ -2363,6 +2915,87 @@ export function AuthorDashboard() {
                 className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
               >
                 {editSubmitting ? "保存中…" : "保存修改"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {audiobookEditOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="presentation"
+          onClick={(e) => e.target === e.currentTarget && closeAudiobookEditModal()}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="编辑有声书信息"
+            className="w-full max-w-lg rounded-2xl border border-neutral-200 bg-[var(--background)] p-6 shadow-xl dark:border-neutral-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold">编辑有声书信息</h2>
+            <div className="mt-4 space-y-4">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                  有声书标题
+                </label>
+                <input
+                  type="text"
+                  value={audiobookEditTitle}
+                  onChange={(e) => setAudiobookEditTitle(e.target.value)}
+                  maxLength={120}
+                  className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-950"
+                  placeholder="例如：第一章 有声版"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                  简介
+                </label>
+                <textarea
+                  value={audiobookEditSynopsis}
+                  onChange={(e) => setAudiobookEditSynopsis(e.target.value)}
+                  rows={3}
+                  maxLength={20000}
+                  className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-950"
+                  placeholder="简要介绍这条有声书内容"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                  详情
+                </label>
+                <textarea
+                  value={audiobookEditDetails}
+                  onChange={(e) => setAudiobookEditDetails(e.target.value)}
+                  rows={5}
+                  maxLength={20000}
+                  className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-950"
+                  placeholder="补充备注、章节说明或运营信息"
+                />
+              </div>
+              {audiobookEditError ? (
+                <p className="text-sm text-red-600 dark:text-red-400">{audiobookEditError}</p>
+              ) : null}
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeAudiobookEditModal}
+                disabled={audiobookEditSubmitting}
+                className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium dark:border-neutral-600"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveAudiobookEdit()}
+                disabled={audiobookEditSubmitting}
+                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+              >
+                {audiobookEditSubmitting ? "保存中…" : "保存修改"}
               </button>
             </div>
           </div>

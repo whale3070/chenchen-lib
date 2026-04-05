@@ -8,12 +8,15 @@ import { ReaderAiRecommendPanel } from "@/components/reader-ai-recommend-panel";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 
 type LibraryItem = {
+  kind?: "novel" | "audiobook";
   articleId: string;
   title: string;
   synopsis: string;
   publishedAt: string;
   language: string;
   languageLabel: string;
+  audioUrl?: string;
+  details?: string;
 };
 
 const READER_LANG_PREF_KEY = "chenchen:reader:library:langs";
@@ -32,6 +35,7 @@ export default function LibraryPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"library" | "settings">("library");
+  const [contentFilter, setContentFilter] = useState<"all" | "novel" | "audiobook">("all");
   const [selectedLangs, setSelectedLangs] = useState<string[]>(["zh"]);
   const [recommendCollapsed, setRecommendCollapsed] = useState(false);
 
@@ -130,15 +134,25 @@ export default function LibraryPage() {
     [items, selectedLangs],
   );
 
+  const filteredByContentItems = useMemo(
+    () =>
+      filteredItems.filter((item) => {
+        if (contentFilter === "all") return true;
+        const kind = item.kind ?? "novel";
+        return kind === contentFilter;
+      }),
+    [filteredItems, contentFilter],
+  );
+
   const groupedItems = useMemo(
     () =>
-      filteredItems.reduce<Record<string, LibraryItem[]>>((acc, item) => {
+      filteredByContentItems.reduce<Record<string, LibraryItem[]>>((acc, item) => {
         const key = item.languageLabel || item.language.toUpperCase();
         if (!acc[key]) acc[key] = [];
         acc[key].push(item);
         return acc;
       }, {}),
-    [filteredItems],
+    [filteredByContentItems],
   );
 
   const toggleLang = (lang: string) => {
@@ -211,6 +225,44 @@ export default function LibraryPage() {
             读者语言设置
           </button>
         </div>
+        {tab === "library" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-zinc-500">内容筛选：</span>
+            <button
+              type="button"
+              onClick={() => setContentFilter("all")}
+              className={
+                contentFilter === "all"
+                  ? "rounded-md border border-cyan-400/60 bg-cyan-500/15 px-3 py-1 text-xs text-cyan-200"
+                  : "rounded-md border border-[#2d405e] bg-[#0d1625] px-3 py-1 text-xs text-zinc-300"
+              }
+            >
+              全部
+            </button>
+            <button
+              type="button"
+              onClick={() => setContentFilter("novel")}
+              className={
+                contentFilter === "novel"
+                  ? "rounded-md border border-cyan-400/60 bg-cyan-500/15 px-3 py-1 text-xs text-cyan-200"
+                  : "rounded-md border border-[#2d405e] bg-[#0d1625] px-3 py-1 text-xs text-zinc-300"
+              }
+            >
+              仅看小说
+            </button>
+            <button
+              type="button"
+              onClick={() => setContentFilter("audiobook")}
+              className={
+                contentFilter === "audiobook"
+                  ? "rounded-md border border-cyan-400/60 bg-cyan-500/15 px-3 py-1 text-xs text-cyan-200"
+                  : "rounded-md border border-[#2d405e] bg-[#0d1625] px-3 py-1 text-xs text-zinc-300"
+              }
+            >
+              仅看有声书
+            </button>
+          </div>
+        ) : null}
 
         {loading ? (
           <p className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
@@ -247,7 +299,7 @@ export default function LibraryPage() {
           <p className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
             暂无已发布文章 ID。
           </p>
-        ) : filteredItems.length === 0 ? (
+        ) : filteredByContentItems.length === 0 ? (
           <p className="rounded-xl border border-[#1b2b43] bg-[#09101b] p-4 text-sm text-zinc-400">
             当前语言设置下暂无可阅读内容。
           </p>
@@ -265,28 +317,50 @@ export default function LibraryPage() {
                       key={`${item.articleId}-${item.language}`}
                       className="rounded-xl border border-[#1b2b43] bg-[#0d1524] px-4 py-3"
                     >
-                      <button
-                        type="button"
-                        onClick={() => void handleOpenArticle(item.articleId, item.language)}
-                        disabled={isConnectPending}
-                        className="w-full cursor-pointer text-left disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <p className="break-words text-sm font-medium text-zinc-100 [overflow-wrap:anywhere] hover:text-cyan-300">
-                          {item.title}
-                        </p>
-                        {item.synopsis ? (
-                          <p className="mt-1 line-clamp-2 break-words text-xs text-zinc-400 [overflow-wrap:anywhere]">
-                            {item.synopsis}
+                      {item.kind === "audiobook" && item.audioUrl ? (
+                        <div>
+                          <p className="break-words text-sm font-medium text-zinc-100 [overflow-wrap:anywhere]">
+                            {item.title}
                           </p>
-                        ) : null}
-                        <p className="mt-1 break-all text-xs text-zinc-400">
-                          文章ID：{item.articleId}
-                        </p>
-                        <p className="mt-1 text-xs text-zinc-500">
-                          语言：{item.language.toUpperCase()}
-                        </p>
-                        <p className="mt-1 text-xs text-cyan-400">点击阅读</p>
-                      </button>
+                          {item.synopsis ? (
+                            <p className="mt-1 line-clamp-2 break-words text-xs text-zinc-400 [overflow-wrap:anywhere]">
+                              {item.synopsis}
+                            </p>
+                          ) : null}
+                          {item.details ? (
+                            <p className="mt-1 line-clamp-3 break-words text-xs text-zinc-500 [overflow-wrap:anywhere]">
+                              {item.details}
+                            </p>
+                          ) : null}
+                          <p className="mt-1 break-all text-xs text-zinc-500">
+                            有声书ID：{item.articleId}
+                          </p>
+                          <audio controls src={item.audioUrl} className="mt-2 w-full" />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleOpenArticle(item.articleId, item.language)}
+                          disabled={isConnectPending}
+                          className="w-full cursor-pointer text-left disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <p className="break-words text-sm font-medium text-zinc-100 [overflow-wrap:anywhere] hover:text-cyan-300">
+                            {item.title}
+                          </p>
+                          {item.synopsis ? (
+                            <p className="mt-1 line-clamp-2 break-words text-xs text-zinc-400 [overflow-wrap:anywhere]">
+                              {item.synopsis}
+                            </p>
+                          ) : null}
+                          <p className="mt-1 break-all text-xs text-zinc-400">
+                            文章ID：{item.articleId}
+                          </p>
+                          <p className="mt-1 text-xs text-zinc-500">
+                            语言：{item.language.toUpperCase()}
+                          </p>
+                          <p className="mt-1 text-xs text-cyan-400">点击阅读</p>
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>

@@ -10,6 +10,9 @@ export const runtime = "nodejs";
 
 const DEFAULT_DOC_ID = "default";
 
+/** 与 ai/chapterize 的 MAX_CHAPTERS（2000）+ 卷/顶层节点对齐，避免工作台「上传小说素材」保存失败 */
+const MAX_STRUCTURE_NODES = 2500;
+
 type StructurePayload = {
   authorId: string;
   docId: string;
@@ -32,9 +35,8 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 
-function parseNodes(raw: unknown): PlotNode[] | null {
+function parseNodesArray(raw: unknown): PlotNode[] | null {
   if (!Array.isArray(raw)) return null;
-  if (raw.length > 500) return null;
   for (const item of raw) {
     if (!parseNode(item)) return null;
   }
@@ -118,7 +120,16 @@ export async function POST(req: NextRequest) {
   const docId =
     typeof o.docId === "string" && o.docId.length > 0 ? o.docId : DEFAULT_DOC_ID;
 
-  const nodes = parseNodes(o.nodes);
+  if (!Array.isArray(o.nodes)) {
+    return badRequest("nodes 应为数组");
+  }
+  if (o.nodes.length > MAX_STRUCTURE_NODES) {
+    return badRequest(
+      `节点数量超过上限（最多 ${MAX_STRUCTURE_NODES} 个，当前 ${o.nodes.length} 个）`,
+    );
+  }
+
+  const nodes = parseNodesArray(o.nodes);
   let nextNodes: PlotNode[] | null = null;
 
   if (nodes) {
@@ -127,7 +138,7 @@ export async function POST(req: NextRequest) {
     const chapterId = typeof o.chapterId === "string" ? o.chapterId.trim() : "";
     const chapterNode = parseNode(o.chapterNode);
     if (!chapterId || !chapterNode || chapterNode.kind !== "chapter") {
-      return badRequest("Invalid nodes array");
+      return badRequest("nodes 无效：请传入完整节点数组，或提供有效的 chapterId + chapterNode");
     }
     if (chapterNode.id !== chapterId) {
       return badRequest("chapterId and chapterNode.id mismatch");

@@ -19,7 +19,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   );
 
   return (
-    <WagmiProvider config={wagmiConfig}>
+    <WagmiProvider config={wagmiConfig} reconnectOnMount>
       <QueryClientProvider client={queryClient}>
         <WalletAuthSync />
         <BillingUserSync />

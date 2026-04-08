@@ -1,4 +1,15 @@
+import path from "node:path";
+
+import { loadEnvConfig } from "@next/env";
 import type { NextConfig } from "next";
+
+const webDir = __dirname;
+/** Monorepo root (`chenchen-lib/`), where `.env.production` holds ARK_*, DEEPSEEK_*, etc. */
+const repoRoot = path.join(__dirname, "..", "..");
+
+// apps/web/.env* first (local overrides), then repo root (canonical production secrets).
+loadEnvConfig(webDir);
+loadEnvConfig(repoRoot);
 
 /**
  * 公网访问请勿长期运行 `next dev`：会拉取 `/_next/webpack-hmr`，经反代时须配置 WebSocket

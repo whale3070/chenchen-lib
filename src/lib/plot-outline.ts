@@ -158,14 +158,20 @@ export function removeSectionAndPromoteChildrenFlat(
   return outlineTreeToFlat(nextRoots);
 }
 
+/** 解析「新节点挂在哪」时的用途：章与节在无卷时的兜底策略不同。 */
+export type ResolveParentForNewNodeIntent = "chapter" | "section";
+
 /**
- * 新增章节时挂到哪个父节点：优先当前大纲选中（卷/节），选中章则上溯到最近的卷或节；
- * 否则用第一个卷；没有任何卷时 createVolumeIfMissing 为 true，由调用方先建卷再挂章。
+ * 新增章节（或节）时挂到哪个父节点：优先当前大纲选中（卷/节），选中章则上溯到最近的卷或节；
+ * 根级章（无 parentId）在 intent=chapter 时新章与之并列挂在根级，不自动建卷。
+ * 否则用第一个卷；仍无法确定时 createVolumeIfMissing 为 true（由调用方先建卷再挂子节点）。
  */
 export function resolveParentForNewChapter(
   flat: PlotNode[],
   selectedOutlineId: string | null,
+  options?: { intent?: ResolveParentForNewNodeIntent },
 ): { parentId: string | null; createVolumeIfMissing: boolean } {
+  const intent = options?.intent ?? "chapter";
   const byId = new Map(flat.map((n) => [n.id, n]));
 
   const climbToVolumeOrSection = (startId: string | undefined): string | null => {
@@ -190,12 +196,28 @@ export function resolveParentForNewChapter(
       if (sel.kind === "chapter") {
         const parent = climbToVolumeOrSection(sel.parentId);
         if (parent) return { parentId: parent, createVolumeIfMissing: false };
+        if (intent === "chapter" && sel.parentId == null) {
+          return { parentId: null, createVolumeIfMissing: false };
+        }
       }
     }
   }
 
   const firstVol = flat.find((n) => n.kind === "volume");
   if (firstVol) return { parentId: firstVol.id, createVolumeIfMissing: false };
+
+  if (intent === "chapter") {
+    const chapters = flat.filter((n) => n.kind === "chapter");
+    if (chapters.length > 0) {
+      const parents = new Set(
+        chapters.map((c) => (c.parentId == null ? null : c.parentId)),
+      );
+      if (parents.size === 1) {
+        const only = [...parents][0];
+        return { parentId: only, createVolumeIfMissing: false };
+      }
+    }
+  }
 
   return { parentId: null, createVolumeIfMissing: true };
 }

@@ -105,6 +105,23 @@ function displayChapterTitle(
   return title;
 }
 
+function resolveSpeechLocale(articleLanguage: string | undefined): string {
+  const lang = (articleLanguage ?? "").trim().toLowerCase();
+  const map: Record<string, string> = {
+    ja: "ja-JP",
+    ko: "ko-KR",
+    fr: "fr-FR",
+    de: "de-DE",
+    es: "es-ES",
+    ru: "ru-RU",
+    zh: "zh-CN",
+    en: "en-US",
+  };
+  if (map[lang]) return map[lang];
+  if (/^[a-z]{2,3}(?:-[a-z]{2,3})?$/i.test(lang)) return lang;
+  return "zh-CN";
+}
+
 export default function ReaderArticlePage({
   params,
 }: {
@@ -142,11 +159,19 @@ export default function ReaderArticlePage({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [speechCharIndex, setSpeechCharIndex] = useState(0);
+  const [audioBusy, setAudioBusy] = useState(false);
+  const [audioUrl, setAudioUrl] = useState("");
+  const [audioError, setAudioError] = useState("");
+  const [audioFileName, setAudioFileName] = useState("tts-ja.mp3");
+  const [backgroundPlayEnabled, setBackgroundPlayEnabled] = useState(true);
+  const [audioAutoplayPending, setAudioAutoplayPending] = useState(false);
   const [visitedChapterIndexes, setVisitedChapterIndexes] = useState<Set<number>>(
     () => new Set([0]),
   );
   const chapterTopRef = useRef<HTMLElement | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioAbortRef = useRef<AbortController | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const uiLang = article?.language === "zh" || !article?.language ? "zh" : "en";
   const t =
     uiLang === "zh"
@@ -177,6 +202,14 @@ export default function ReaderArticlePage({
           stop: "停止",
           progress: "朗读进度",
           speakingUnavailable: "当前浏览器不支持朗读功能",
+          noJaVoice: "未检测到日语语音包，已自动切换后端 MP3。",
+          genMp3: "朗读并生成 MP3",
+          stopMp3: "停止生成",
+          mp3Player: "音频播放",
+          downloadMp3: "下载 MP3",
+          generatingMp3: "正在生成 MP3，请稍候…",
+          bgPlay: "背景朗读",
+          bgPlayHint: "切到后台继续播放（系统支持时）",
           tip: "打赏作者",
           share: "社交媒体分享",
           shareTitle: "社交媒体作品分享",
@@ -213,6 +246,14 @@ export default function ReaderArticlePage({
           stop: "Stop",
           progress: "Progress",
           speakingUnavailable: "Text-to-speech is unavailable in this browser",
+          noJaVoice: "No Japanese voice found. Switched to backend MP3.",
+          genMp3: "Generate MP3",
+          stopMp3: "Stop",
+          mp3Player: "Audio Player",
+          downloadMp3: "Download MP3",
+          generatingMp3: "Generating MP3...",
+          bgPlay: "Background Playback",
+          bgPlayHint: "Keep playing in background when supported",
           tip: "Tip Author",
           share: "Social Share",
           shareTitle: "Social Media Share",
@@ -318,16 +359,34 @@ export default function ReaderArticlePage({
     return stripHtmlToPlainForReader(currentChapter?.contentHtml ?? "");
   }, [currentChapter]);
   const supportsSpeech = typeof window !== "undefined" && "speechSynthesis" in window;
-  const speechVoices = useMemo(() => {
+  const speechLocale = useMemo(
+    () => resolveSpeechLocale(article?.language),
+    [article?.language],
+  );
+  const matchedSpeechVoices = useMemo(() => {
     if (voices.length === 0) return [];
-    const lang = article?.language === "en" ? "en" : "zh";
-    const filtered = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
-    return filtered.length > 0 ? filtered : voices;
-  }, [article?.language, voices]);
+    const target = speechLocale.toLowerCase();
+    const base = target.split("-")[0];
+    const exact = voices.filter((v) => v.lang.toLowerCase() === target);
+    if (exact.length > 0) return exact;
+    const byBase = voices.filter((v) => {
+      const l = v.lang.toLowerCase();
+      return l === base || l.startsWith(`${base}-`);
+    });
+    return byBase;
+  }, [speechLocale, voices]);
   const speechProgressPct = useMemo(() => {
     if (!currentChapterPlainText) return 0;
     return Math.min(100, Math.max(0, (speechCharIndex / currentChapterPlainText.length) * 100));
   }, [currentChapterPlainText, speechCharIndex]);
+  const isJapaneseSpeech = speechLocale.toLowerCase().startsWith("ja");
+  const hasMatchingSpeechVoice = matchedSpeechVoices.length > 0;
+  const speechVoices = useMemo(() => {
+    if (hasMatchingSpeechVoice) return matchedSpeechVoices;
+    // 日语不允许回退到中文/英文 voice，避免 “chinese letter ...” 误读。
+    if (isJapaneseSpeech) return [];
+    return voices;
+  }, [hasMatchingSpeechVoice, isJapaneseSpeech, matchedSpeechVoices, voices]);
 
   const stopSpeaking = useCallback(() => {
     if (!supportsSpeech) return;
@@ -339,9 +398,13 @@ export default function ReaderArticlePage({
 
   const startSpeaking = useCallback(() => {
     if (!supportsSpeech || !currentChapterPlainText) return;
+    if (isJapaneseSpeech && !hasMatchingSpeechVoice) {
+      setAudioError(t.noJaVoice);
+      return;
+    }
     stopSpeaking();
     const u = new SpeechSynthesisUtterance(currentChapterPlainText);
-    u.lang = article?.language === "en" ? "en-US" : "zh-CN";
+    u.lang = speechLocale;
     u.rate = speakRate;
     const selected = speechVoices.find((v) => v.name === voiceName);
     if (selected) u.voice = selected;
@@ -371,8 +434,11 @@ export default function ReaderArticlePage({
     utteranceRef.current = u;
     window.speechSynthesis.speak(u);
   }, [
-    article?.language,
     currentChapterPlainText,
+    hasMatchingSpeechVoice,
+    isJapaneseSpeech,
+    t.noJaVoice,
+    speechLocale,
     speakRate,
     speechVoices,
     stopSpeaking,
@@ -425,6 +491,133 @@ export default function ReaderArticlePage({
     }
   };
 
+  const stopGeneratingAudio = useCallback(() => {
+    audioAbortRef.current?.abort();
+    audioAbortRef.current = null;
+    setAudioBusy(false);
+  }, []);
+
+  const handleGenerateMp3 = useCallback(async () => {
+    if (!currentChapterPlainText.trim()) {
+      setAudioError(uiLang === "zh" ? "本章暂无可朗读文本。" : "No text to synthesize.");
+      return;
+    }
+    stopGeneratingAudio();
+    setAudioBusy(true);
+    setAudioError("");
+    const ac = new AbortController();
+    audioAbortRef.current = ac;
+    try {
+      const res = await fetch("/api/v1/tts/jp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
+        body: JSON.stringify({
+          text: currentChapterPlainText,
+          speed: speakRate,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      setAudioUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(blob);
+      });
+      setAudioFileName(`article-${articleId}-chapter-${chapterIndex + 1}.mp3`);
+      if (backgroundPlayEnabled) {
+        setAudioAutoplayPending(true);
+      }
+      const cacheHit = res.headers.get("X-TTS-Cache-Hit");
+      const chunkCount = Number.parseInt(res.headers.get("X-TTS-Chunk-Count") ?? "1", 10);
+      const isChunked = Number.isFinite(chunkCount) && chunkCount > 1;
+      if (cacheHit === "1") {
+        setAudioError(
+          uiLang === "zh"
+            ? isChunked
+              ? "长文本已自动分段合成，并复用服务器缓存，可直接播放 MP3。"
+              : "已复用服务器缓存，可直接播放 MP3。"
+            : isChunked
+              ? "Long text was auto-segmented and synthesized, and server cache was reused. You can play MP3 now."
+              : "Reused server cache. You can play MP3 now.",
+        );
+      } else if (isChunked) {
+        setAudioError(
+          uiLang === "zh"
+            ? "长文本已自动分段合成，可直接播放 MP3。"
+            : "Long text was auto-segmented and synthesized. You can play MP3 now.",
+        );
+      }
+    } catch (e) {
+      if (ac.signal.aborted) return;
+      setAudioError(
+        e instanceof Error
+          ? e.message
+          : uiLang === "zh"
+            ? "生成 MP3 失败，请稍后重试。"
+            : "Failed to generate MP3.",
+      );
+    } finally {
+      if (audioAbortRef.current === ac) audioAbortRef.current = null;
+      setAudioBusy(false);
+    }
+  }, [
+    articleId,
+    backgroundPlayEnabled,
+    chapterIndex,
+    currentChapterPlainText,
+    speakRate,
+    stopGeneratingAudio,
+    uiLang,
+  ]);
+
+  useEffect(() => {
+    if (!audioAutoplayPending || !audioUrl) return;
+    const el = audioPlayerRef.current;
+    if (!el) return;
+    const playPromise = el.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(() => {
+        setAudioError(
+          uiLang === "zh"
+            ? "自动播放被浏览器阻止，请手动点击播放器开始。"
+            : "Autoplay was blocked. Please press play manually.",
+        );
+      });
+    }
+    setAudioAutoplayPending(false);
+  }, [audioAutoplayPending, audioUrl, uiLang]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    if (!backgroundPlayEnabled || !audioUrl || !article) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: article.title,
+        artist: displayChapterTitle(chapterIndex, currentChapter?.title, uiLang),
+        album: "Chenchen-Lib",
+      });
+      navigator.mediaSession.setActionHandler("play", () => {
+        void audioPlayerRef.current?.play();
+      });
+      navigator.mediaSession.setActionHandler("pause", () => {
+        audioPlayerRef.current?.pause();
+      });
+    } catch {
+      // media session is best-effort across browsers
+    }
+    return () => {
+      try {
+        navigator.mediaSession.setActionHandler("play", null);
+        navigator.mediaSession.setActionHandler("pause", null);
+      } catch {
+        // ignore
+      }
+    };
+  }, [article, audioUrl, backgroundPlayEnabled, chapterIndex, currentChapter?.title, uiLang]);
+
   const handleOpenShare = useCallback(async () => {
     if (!address) {
       await requestConnect();
@@ -435,6 +628,35 @@ export default function ReaderArticlePage({
 
   const handleDownloadShareImage = useCallback(async () => {
     if (!article || !shareQrDataUrl || !shareTargetUrl) return;
+    const articleLang = (article.language ?? "").trim().toLowerCase();
+    const isArabic = articleLang.startsWith("ar");
+    const isChinese = articleLang === "zh" || !articleLang;
+    const shareTitleText = isArabic
+      ? `${article.title} - عمل`
+      : isChinese
+        ? `《${article.title}》作品`
+        : `${article.title} · Work`;
+    const shareEntryText = isArabic
+      ? "مدخل مشاركة القارئ على الشبكات الاجتماعية"
+      : isChinese
+        ? "读者社交分享入口"
+        : "Reader social sharing entry";
+    const introFallbackText = isArabic
+      ? "امسح رمز QR للقراءة، مناسب للتصفح على الهاتف."
+      : isChinese
+        ? "扫码即可阅读，适合移动端浏览。"
+        : "Scan the QR code to read. Best for mobile.";
+    const walletPrefix = isArabic
+      ? "محفظة مشاركة القارئ"
+      : isChinese
+        ? "分享读者钱包"
+        : "Reader share wallet";
+    const downloadSuffix = isArabic
+      ? "قارئ-مشاركة-اجتماعية"
+      : isChinese
+        ? "读者社交分享图"
+        : "reader-social-share";
+
     const canvas = document.createElement("canvas");
     canvas.width = 1080;
     canvas.height = 1520;
@@ -453,11 +675,22 @@ export default function ReaderArticlePage({
     ctx.fillStyle = "#e5e7eb";
     ctx.font = "bold 52px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(`《${article.title}》作品`, 540, 185);
+    const titleStartY = 170;
+    const titleLineHeight = 58;
+    const titleLines = drawWrappedCenteredTextClamped(
+      ctx,
+      shareTitleText,
+      540,
+      titleStartY,
+      840,
+      titleLineHeight,
+      2,
+    );
 
     ctx.fillStyle = "#9ca3af";
     ctx.font = "34px sans-serif";
-    ctx.fillText("读者社交分享入口", 540, 245);
+    const subtitleY = titleStartY + Math.max(1, titleLines) * titleLineHeight + 12;
+    ctx.fillText(shareEntryText, 540, subtitleY);
 
     const qrImage = await loadImage(shareQrDataUrl);
     const qrSize = 500;
@@ -469,8 +702,8 @@ export default function ReaderArticlePage({
 
     ctx.fillStyle = "#cbd5e1";
     ctx.font = "28px sans-serif";
-    const intro = article.synopsis || "扫码即可阅读，适合移动端浏览。";
-    const introStartY = 330;
+    const intro = article.synopsis || introFallbackText;
+    const introStartY = Math.max(320, subtitleY + 70);
     const introLineHeight = 42;
     let cursorY = introStartY;
     const introMaxLines = Math.max(
@@ -516,13 +749,13 @@ export default function ReaderArticlePage({
 
     ctx.fillStyle = "#22d3ee";
     ctx.font = "24px sans-serif";
-    const walletLabel = `分享读者钱包：${address ?? "未连接"}`;
+    const walletLabel = `${walletPrefix}: ${address ?? (isArabic ? "غير متصل" : isChinese ? "未连接" : "Not connected")}`;
     const walletStartY = linkStartY + Math.max(1, shareUrlLines) * 34 + 74;
     drawWrappedCenteredText(ctx, walletLabel, 540, walletStartY, 860, 34);
 
     const a = document.createElement("a");
     a.href = canvas.toDataURL("image/png");
-    a.download = `${article.title}-读者社交分享图.png`;
+    a.download = `${article.title}-${downloadSuffix}.png`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -583,6 +816,27 @@ export default function ReaderArticlePage({
       return next;
     });
   }, [chapterIndex, stopSpeaking]);
+
+  useEffect(() => {
+    setAudioError("");
+    setAudioBusy(false);
+    audioAbortRef.current?.abort();
+    audioAbortRef.current = null;
+    setAudioUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return "";
+    });
+  }, [chapterIndex]);
+
+  useEffect(() => {
+    return () => {
+      audioAbortRef.current?.abort();
+      setAudioUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return prev;
+      });
+    };
+  }, []);
 
   useEffect(() => {
     if (!supportsSpeech) return;
@@ -777,9 +1031,6 @@ export default function ReaderArticlePage({
                   type="button"
                   onClick={() => {
                     setReaderTab("speak");
-                    if (!isSpeaking && !isPaused) {
-                      startSpeaking();
-                    }
                   }}
                   className={
                     readerTab === "speak"
@@ -791,8 +1042,8 @@ export default function ReaderArticlePage({
                 </button>
               </div>
 
-              {readerTab === "read" ? (
-                currentChapter ? (
+              <div className={readerTab === "read" ? "" : "hidden"}>
+                {currentChapter ? (
                   <div className="min-w-0 overflow-x-auto">
                     <article
                       className={
@@ -831,96 +1082,82 @@ export default function ReaderArticlePage({
                   </div>
                 ) : (
                   <p className="text-sm text-zinc-400">本章暂无内容。</p>
-                )
-              ) : (
-                <div className="space-y-3">
-                  {!supportsSpeech ? (
-                    <p className="text-sm text-zinc-400">{t.speakingUnavailable}</p>
-                  ) : (
-                    <>
-                      <div className="rounded-lg border border-[#1f3048] bg-[#0b1422] p-3">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <label className="text-xs text-zinc-400">
-                            {t.voice}
-                            <select
-                              value={voiceName}
-                              onChange={(e) => setVoiceName(e.target.value)}
-                              className="ml-2 rounded border border-zinc-700 bg-[#0b1320] px-2 py-1 text-xs text-zinc-200"
-                            >
-                              {speechVoices.map((v) => (
-                                <option key={`${v.name}-${v.lang}`} value={v.name}>
-                                  {v.name} ({v.lang})
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="text-xs text-zinc-400">
-                            {t.speed}
-                            <input
-                              type="range"
-                              min={0.6}
-                              max={1.6}
-                              step={0.1}
-                              value={speakRate}
-                              onChange={(e) => setSpeakRate(Number(e.target.value))}
-                              className="ml-2 align-middle"
-                            />
-                            <span className="ml-1 text-zinc-300">{speakRate.toFixed(1)}x</span>
-                          </label>
-                        </div>
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={startSpeaking}
-                            className="rounded-md border border-emerald-500/50 px-3 py-1 text-xs text-emerald-300 hover:bg-emerald-950/30"
-                          >
-                            {t.play}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!isSpeaking || isPaused}
-                            onClick={pauseSpeaking}
-                            className="rounded-md border border-amber-500/50 px-3 py-1 text-xs text-amber-300 hover:bg-amber-950/30 disabled:opacity-40"
-                          >
-                            {t.pause}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!isSpeaking || !isPaused}
-                            onClick={resumeSpeaking}
-                            className="rounded-md border border-cyan-500/50 px-3 py-1 text-xs text-cyan-300 hover:bg-cyan-950/30 disabled:opacity-40"
-                          >
-                            {t.resume}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!isSpeaking && !isPaused}
-                            onClick={stopSpeaking}
-                            className="rounded-md border border-rose-500/50 px-3 py-1 text-xs text-rose-300 hover:bg-rose-950/30 disabled:opacity-40"
-                          >
-                            {t.stop}
-                          </button>
-                        </div>
-                        <div className="mt-3">
-                          <div className="mb-1 flex items-center justify-between text-[11px] text-zinc-400">
-                            <span>{t.progress}</span>
-                            <span>{speechProgressPct.toFixed(0)}%</span>
-                          </div>
-                          <div className="h-2 rounded bg-zinc-800">
-                            <div
-                              className="h-2 rounded bg-emerald-400 transition-all"
-                              style={{ width: `${speechProgressPct}%` }}
-                            />
-                          </div>
-                        </div>
+                )}
+              </div>
+              <div className={readerTab === "speak" ? "space-y-3" : "hidden"}>
+                  <div className="rounded-lg border border-[#1f3048] bg-[#0b1422] p-3">
+                    <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[#21324a] pb-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleGenerateMp3()}
+                        disabled={audioBusy}
+                        className="rounded-md border border-cyan-500/50 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-950/30 disabled:opacity-40"
+                      >
+                        {t.genMp3}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={stopGeneratingAudio}
+                        disabled={!audioBusy}
+                        className="rounded-md border border-rose-500/50 px-3 py-1 text-xs text-rose-300 hover:bg-rose-950/30 disabled:opacity-40"
+                      >
+                        {t.stopMp3}
+                      </button>
+                      <label className="text-xs text-zinc-400">
+                        {t.speed}
+                        <input
+                          type="range"
+                          min={0.6}
+                          max={1.6}
+                          step={0.1}
+                          value={speakRate}
+                          onChange={(e) => setSpeakRate(Number(e.target.value))}
+                          className="ml-2 align-middle"
+                        />
+                        <span className="ml-1 text-zinc-300">{speakRate.toFixed(1)}x</span>
+                      </label>
+                      <label className="inline-flex items-center gap-1 text-xs text-zinc-400">
+                        <input
+                          type="checkbox"
+                          checked={backgroundPlayEnabled}
+                          onChange={(e) => setBackgroundPlayEnabled(e.target.checked)}
+                        />
+                        <span>{t.bgPlay}</span>
+                      </label>
+                      {audioBusy ? (
+                        <span className="text-xs text-zinc-400">{t.generatingMp3}</span>
+                      ) : null}
+                    </div>
+                    <div className="mb-3 rounded-md border border-[#203247] bg-[#0a1220] p-2">
+                      <p className="mb-1 text-[11px] text-zinc-500">{t.bgPlayHint}</p>
+                      <p className="mb-2 text-[11px] text-zinc-400">{t.mp3Player}</p>
+                      <audio
+                        ref={audioPlayerRef}
+                        controls
+                        src={audioUrl || undefined}
+                        className="w-full"
+                        preload="metadata"
+                        playsInline
+                      />
+                      <div className="mt-2">
+                        <a
+                          href={audioUrl || "#"}
+                          download={audioFileName}
+                          className={`rounded-md border px-3 py-1 text-xs ${
+                            audioUrl
+                              ? "border-emerald-500/50 text-emerald-300 hover:bg-emerald-950/30"
+                              : "pointer-events-none border-zinc-700 text-zinc-500"
+                          }`}
+                        >
+                          {t.downloadMp3}
+                        </a>
                       </div>
-                      <div className="rounded-lg border border-[#1f3048] bg-[#0b1422] p-3 text-sm leading-7 text-zinc-200">
-                        {renderSpeechHighlight(currentChapterPlainText, speechCharIndex)}
-                      </div>
-                    </>
-                  )}
+                      {audioError ? (
+                        <p className="mt-2 text-xs text-rose-300">{audioError}</p>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
-              )}
 
               <div className="mt-5 flex items-center justify-between">
                 <button

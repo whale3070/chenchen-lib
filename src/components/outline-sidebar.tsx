@@ -41,7 +41,7 @@ export type OutlineSidebarProps = {
   nodes: PlotNode[];
   onNodesChange: (nodes: PlotNode[]) => void;
   /** 持久化到服务端（拖拽后立即调用；文案修改防抖后调用） */
-  onUpdateStructure: (nodes: PlotNode[]) => void;
+  onUpdateStructure: (nodes: PlotNode[]) => Promise<boolean> | boolean;
   /** 点击节点在稿面中定位 */
   onNodeSeek: (range: { from: number; to: number }) => void;
   /** 章节节点：切换到对应章节 */
@@ -65,7 +65,7 @@ export type OutlineSidebarProps = {
   onPublishAllChapters?: () => Promise<void> | void;
   publishAllChaptersDisabled?: boolean;
   /** 删除章节（删除当前选中章节） */
-  onDeleteChapter?: (chapterId: string) => void;
+  onDeleteChapter?: (chapterId: string) => Promise<boolean> | boolean;
 };
 
 const EDIT_COMMIT_MS = 650;
@@ -399,6 +399,10 @@ export function OutlineSidebar({
   publishAllChaptersDisabled,
   onDeleteChapter,
 }: OutlineSidebarProps) {
+  const [deleteSaveStatus, setDeleteSaveStatus] = useState<{
+    kind: "success" | "error";
+    text: string;
+  } | null>(null);
   const roots = useMemo(() => flatToOutlineTree(nodes), [nodes]);
   const rootIds = useMemo(() => roots.map((r) => r.id), [roots]);
   const publishedChapterIdSet = useMemo(
@@ -426,6 +430,12 @@ export function OutlineSidebar({
       persistTimerRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    if (!deleteSaveStatus) return;
+    const timer = window.setTimeout(() => setDeleteSaveStatus(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [deleteSaveStatus]);
 
   const schedulePersist = useCallback(
     (next: PlotNode[]) => {
@@ -560,14 +570,12 @@ export function OutlineSidebar({
         });
         parentForChapter = vId;
       }
-      if (!parentForChapter) return;
-
       next.push({
         id: makeNodeId("plot-chapter"),
         kind: "chapter",
         title: targetTitle,
         summary: "",
-        parentId: parentForChapter,
+        ...(parentForChapter != null ? { parentId: parentForChapter } : {}),
       });
 
       onNodesChange(next);
@@ -592,7 +600,7 @@ export function OutlineSidebar({
     ensureVolumeAndAddChapter(maxNo + 1);
   }, [nodes, ensureVolumeAndAddChapter]);
 
-  const deleteSelectedOutlineBranch = useCallback(() => {
+  const deleteSelectedOutlineBranch = useCallback(async () => {
     const anchor = outlineToolbarAnchorId;
     if (!anchor) return;
     const sel = nodes.find((n) => n.id === anchor);
@@ -600,7 +608,12 @@ export function OutlineSidebar({
 
     if (sel.kind === "chapter") {
       if (!onDeleteChapter) return;
-      onDeleteChapter(anchor);
+      const ok = await onDeleteChapter(anchor);
+      setDeleteSaveStatus(
+        ok
+          ? { kind: "success", text: "删除成功，已保存到云端。" }
+          : { kind: "error", text: "删除失败，修改未保存。" },
+      );
       return;
     }
 
@@ -618,7 +631,12 @@ export function OutlineSidebar({
       if (!next) return;
       onNodesChange(next);
       flushPersistTimer();
-      onUpdateStructure(next);
+      const ok = await onUpdateStructure(next);
+      setDeleteSaveStatus(
+        ok
+          ? { kind: "success", text: "删除成功，已保存到云端。" }
+          : { kind: "error", text: "删除失败，修改未保存。" },
+      );
       setActiveOutlineId(null);
       return;
     }
@@ -637,7 +655,12 @@ export function OutlineSidebar({
       if (!next) return;
       onNodesChange(next);
       flushPersistTimer();
-      onUpdateStructure(next);
+      const ok = await onUpdateStructure(next);
+      setDeleteSaveStatus(
+        ok
+          ? { kind: "success", text: "删除成功，已保存到云端。" }
+          : { kind: "error", text: "删除失败，修改未保存。" },
+      );
       setActiveOutlineId(null);
     }
   }, [
@@ -679,6 +702,7 @@ export function OutlineSidebar({
     const { parentId, createVolumeIfMissing } = resolveParentForNewChapter(
       next,
       outlineToolbarAnchorId,
+      { intent: "section" },
     );
     let parentForSection = parentId;
     if (createVolumeIfMissing) {
@@ -787,6 +811,20 @@ export function OutlineSidebar({
             删除卷/章/节
           </button>
         </div>
+        {deleteSaveStatus ? (
+          <div
+            className={[
+              "mt-2 rounded border px-2 py-1 text-[11px] font-medium",
+              deleteSaveStatus.kind === "success"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                : "border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300",
+            ].join(" ")}
+            role="status"
+            aria-live="polite"
+          >
+            {deleteSaveStatus.text}
+          </div>
+        ) : null}
         {onWithdrawPublish ? (
           <button
             type="button"

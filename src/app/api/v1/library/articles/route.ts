@@ -61,6 +61,14 @@ type StructurePayload = {
   }>;
   updatedAt?: string;
 };
+type ChapterContentPayload = {
+  chapterId?: string;
+  chapterBodySource?: "markdown" | "richtext";
+  chapterMarkdown?: string;
+  chapterHtml?: string;
+  chapterHtmlDesktop?: string;
+  chapterHtmlMobile?: string;
+};
 
 type AuthorNovelIndex = {
   novels?: Array<{
@@ -281,6 +289,46 @@ async function readTranslationStore(
   } catch {
     return null;
   }
+}
+
+async function readChapterContentMap(
+  authorId: string,
+  novelId: string,
+): Promise<Record<string, ChapterContentPayload>> {
+  const safeDoc = novelId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
+  const dir = path.join(
+    process.cwd(),
+    ".data",
+    "chapter-content",
+    `${authorId.toLowerCase()}_${safeDoc}`,
+  );
+  const out: Record<string, ChapterContentPayload> = {};
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(dir);
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return out;
+    throw e;
+  }
+  await Promise.all(
+    files
+      .filter((name) => name.endsWith(".json") && name !== "_legacy-structure-migrated.json")
+      .map(async (name) => {
+        try {
+          const raw = await fs.readFile(path.join(dir, name), "utf8");
+          const data = JSON.parse(raw) as ChapterContentPayload;
+          const id = typeof data.chapterId === "string" ? data.chapterId.trim() : "";
+          if (id) out[id] = data;
+        } catch {
+          // ignore broken single file
+        }
+      }),
+  );
+  return out;
 }
 
 function languageLabel(lang: string): string {
@@ -675,19 +723,25 @@ export async function GET(req: NextRequest) {
   try {
     const raw = await fs.readFile(structurePath, "utf8");
     const structure = JSON.parse(raw) as StructurePayload;
+    const chapterContentMap = await readChapterContentMap(rec.data.authorId, rec.data.novelId);
     const chapterNodes =
       structure.nodes?.filter(
         (n) => n.kind === "chapter" && typeof n.title === "string",
       ) ?? [];
     chapters = chapterNodes.map((n) => {
-      const rawHtml = preferMobile
-        ? n.metadata?.chapterHtmlMobile ?? n.metadata?.chapterHtml
-        : n.metadata?.chapterHtmlDesktop ?? n.metadata?.chapterHtml;
+      const storedContent = chapterContentMap[n.id];
+      const rawHtml =
+        (preferMobile
+          ? storedContent?.chapterHtmlMobile ?? storedContent?.chapterHtml
+          : storedContent?.chapterHtmlDesktop ?? storedContent?.chapterHtml) ??
+        (preferMobile
+          ? n.metadata?.chapterHtmlMobile ?? n.metadata?.chapterHtml
+          : n.metadata?.chapterHtmlDesktop ?? n.metadata?.chapterHtml);
       const chapterHtml =
         typeof rawHtml === "string" && rawHtml.trim().length > 0
           ? rawHtml
           : "<p></p>";
-      const rawMd = n.metadata?.chapterMarkdown;
+      const rawMd = storedContent?.chapterMarkdown ?? n.metadata?.chapterMarkdown;
       const chapterMarkdown =
         typeof rawMd === "string" && rawMd.trim().length > 0
           ? rawMd

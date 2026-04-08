@@ -2,8 +2,18 @@
 
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { useCallback, useMemo } from "react";
 
+import { FloatingReaderAiShell } from "@/components/floating-reader-ai-shell";
+import { ReaderAiRecommendPanel } from "@/components/reader-ai-recommend-panel";
+import { getLandingProgressTimeline } from "@/i18n/landing-progress";
+import { translateKey } from "@/i18n/site-messages";
+import { useSiteLocale } from "@/providers/site-locale-provider";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
+
+const HOME_AI_MESSAGES_KEY = "chenchen:reader:ai-assistant:home:messages:v1";
+const HOME_AI_FLOAT_POS_KEY = "chenchen:reader:home:ai-float-pos:v1";
+const HOME_AI_COLLAPSED_KEY = "chenchen:reader:home:ai-assistant-collapsed";
 
 const cardBase =
   "relative flex min-h-[280px] flex-1 flex-col justify-between rounded-2xl border p-10 transition-shadow";
@@ -11,113 +21,8 @@ const cardBase =
 const cardInner =
   "pointer-events-none text-left [&_*]:pointer-events-none";
 
-const progressTimeline = [
-  {
-    dateLabel: "2026 年 4 月 5 日（第七天）",
-    title: "开发进度",
-    items: [
-      "优化txt批量导入功能",
-      "修改网页前端，增加导航页- 项目介绍与路演。",
-      "更新网页首页。",
-    ],
-  },
-  {
-    dateLabel: "2026 年 4 月 4 日（第六天）",
-    title: "开发进度",
-    items: ["有声书上传", "有声书编辑标题/详情", "有声书读者播放"],
-  },
-  {
-    dateLabel: "2026 年 4 月 3 日（第五天）",
-    title: "开发进度",
-    items: [
-      "工单系统-新建页面",
-      "AI 生成后人工微调",
-      "发布后过长内容撑破页面",
-      "英文（或其他翻译语言）阅读时会保留原文图片位置，不再整章丢图",
-      "英文语言下仍有中文残留",
-      "删不掉卷、节",
-      "假设我有六万本小说，那么这个构架带得动吗？",
-      "迁移方案",
-      "服务一万个作者（每人 100 个读者）与六万本免费书籍的架构承载评估",
-      "给工单系统加图片",
-    ],
-  },
-  {
-    dateLabel: "2026 年 4 月 2 日（第四天）",
-    title: "开发进度",
-    items: [
-      "只保留一个标题来源",
-      "删除默认 AI 角色设定",
-      "按照渲染后的格式直接发布",
-      "剧情大纲管理",
-      "自动先落盘当前章节内容",
-      "章节内容错乱修复",
-      "章节重复修复",
-      "加载中 bug 修复",
-      "AI 排版 bug 修复",
-      "发布策略分层",
-      "文案修改 + AI 赋能自动打标签、写简介",
-      "社交媒体作品分享",
-      "一键生成抖音视频（前端）",
-      "多语言翻译功能",
-      "中英夹杂的翻译 bug 修复",
-      "翻译的内容分区",
-    ],
-  },
-  {
-    dateLabel: "2026 年 4 月 1 日（第三天）",
-    title: "功能开发",
-    items: [
-      "图库功能",
-      "章节目录功能",
-      "DeepSeek 自动阅读 + 排版 + 切章导入",
-      "作品真实标题 bug 修复",
-      "一键发布所有章节",
-      "章节目录隐藏功能",
-      "用户点击变色功能",
-      "刷新后记住已读颜色",
-      "添加一个 Markdown 编辑器",
-      "发布章节只读功能",
-      "读者端排版",
-      "读者作者展示不同步 bug 修复",
-      "读者社交媒体小说分享",
-      "读者阅读版本",
-      "AI 排版功能",
-      "定位 bug 修复",
-    ],
-  },
-  {
-    dateLabel: "2026 年 3 月 31 日（第二天）",
-    title: "功能开发",
-    items: [
-      "连接失败帮助弹窗",
-      "修改前端页面排版",
-      "下一章 tab",
-      "财务管理",
-      "删除收款码",
-      "小说分享功能",
-      "读者阅读权限",
-      "影响阅读的 bug 修复",
-    ],
-  },
-  {
-    dateLabel: "2026 年 3 月 30 日（第一天）",
-    title: "已实现的功能",
-    items: [
-      "前端框架搭建",
-      "后端 miroFish 搭建",
-      "钱包连接自动识别身份",
-      "角色管理",
-      "断点记忆恢复",
-      "卡片式大纲组件",
-      "身份分区",
-      "作者管理后台",
-      "发布功能",
-    ],
-  },
-] as const;
-
 export function LandingGate() {
+  const { t, locale, setLocale } = useSiteLocale();
   const {
     address,
     isConnected,
@@ -126,8 +31,60 @@ export function LandingGate() {
     isConnectPending,
   } = useWeb3Auth();
 
+  /** 未连接钱包时首页固定英文；连接后使用已保存界面语言（含斯道普/机翻结果）。 */
+  const tPage = useCallback(
+    (key: string) =>
+      isConnected ? t(key) : translateKey("en", key),
+    [isConnected, t],
+  );
+
+  const displayLocale = isConnected ? locale : "en";
+  const progressTimeline = getLandingProgressTimeline(displayLocale);
+
+  const aiStrings = useMemo(
+    () => ({
+      title: tPage("aiAssistant.title"),
+      dragHint: tPage("aiAssistant.dragHint"),
+      collapseLabel: tPage("aiAssistant.collapseLabel"),
+      collapseTitle: tPage("aiAssistant.collapseTitle"),
+      clear: tPage("aiAssistant.clear"),
+      subtitle: tPage("aiAssistant.subtitle"),
+      emptyHint: tPage("aiAssistant.emptyHint"),
+      placeholder: tPage("aiAssistant.placeholder"),
+      send: tPage("aiAssistant.send"),
+      loading: tPage("aiAssistant.loading"),
+      rateLimit: tPage("aiAssistant.rateLimit"),
+      networkError: tPage("aiAssistant.networkError"),
+      networkErrorReply: tPage("aiAssistant.networkErrorReply"),
+      genericErrorReply: tPage("aiAssistant.genericErrorReply"),
+    }),
+    [tPage],
+  );
+
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden bg-[#050810] text-zinc-100">
+      {isConnected ? (
+        <FloatingReaderAiShell
+          positionStorageKey={HOME_AI_FLOAT_POS_KEY}
+          collapsedStorageKey={HOME_AI_COLLAPSED_KEY}
+          expandButtonTitle={tPage("aiAssistant.expandTitle")}
+          expandButtonLabel={tPage("aiAssistant.expandLabel")}
+          autoExpandUntilLangOnboardingDone
+        >
+          {({ onHeaderPointerDown, headerDragging, requestCollapse }) => (
+            <ReaderAiRecommendPanel
+              storageKey={HOME_AI_MESSAGES_KEY}
+              strings={aiStrings}
+              onCollapse={requestCollapse}
+              onHeaderPointerDown={onHeaderPointerDown}
+              headerDragging={headerDragging}
+              apiLocale={displayLocale}
+              languageOnboarding
+              onLocaleInferred={setLocale}
+            />
+          )}
+        </FloatingReaderAiShell>
+      ) : null}
       <div
         className="pointer-events-none absolute inset-0 opacity-90"
         style={{
@@ -143,23 +100,23 @@ export function LandingGate() {
         </p>
         <nav
           className="mb-8 flex flex-wrap items-center justify-center gap-2"
-          aria-label="项目介绍与路演"
+          aria-label={tPage("landing.navAria")}
         >
           <a
             href="/pitch-deck.html"
             className="rounded-full border border-white/15 bg-white/[0.04] px-3.5 py-1.5 text-[11px] font-medium tracking-wide text-zinc-300 transition hover:border-cyan-400/45 hover:bg-cyan-500/10 hover:text-cyan-100"
           >
-            路演 / Pitch
+            {tPage("landing.navPitch")}
           </a>
-          <a
-            href="/pitch-deck.html"
-            className="rounded-full border border-white/15 bg-white/[0.04] px-3.5 py-1.5 text-[11px] font-medium tracking-wide text-zinc-300 transition hover:border-cyan-400/45 hover:bg-cyan-500/10 hover:text-cyan-100"
+          <Link
+            href="/library/art_f7000ca52e"
+            className="rounded-full border border-white/15 bg-white/[0.04] px-3.5 py-1.5 text-[11px] font-medium tracking-wide text-zinc-300 transition hover:border-violet-400/45 hover:bg-violet-500/10 hover:text-violet-100"
           >
-            郴郴文库介绍
-          </a>
+            {tPage("landing.navGuide")}
+          </Link>
         </nav>
         <h1 className="mb-12 text-center text-2xl font-semibold tracking-tight text-white md:text-3xl">
-          选择你的身份 · 进入矩阵
+          {tPage("landing.heroTitle")}
         </h1>
 
         <div className="grid w-full max-w-4xl grid-cols-1 gap-8 md:grid-cols-2 md:gap-10">
@@ -175,17 +132,17 @@ export function LandingGate() {
             >
               <div className={cardInner}>
                 <span className="text-xs font-medium uppercase tracking-widest text-cyan-300/90">
-                  Creator
+                  {tPage("landing.creatorBadge")}
                 </span>
                 <h2 className="mt-4 text-2xl font-semibold text-white md:text-3xl">
-                  我是作者
+                  {tPage("landing.creatorTitle")}
                 </h2>
                 <p className="mt-3 max-w-sm text-sm leading-relaxed text-zinc-400">
-                  AI 稿面 · 角色与大纲 · 叙事推演
+                  {tPage("landing.creatorDesc")}
                 </p>
               </div>
               <span className="mt-8 inline-flex items-center gap-2 text-xs font-medium text-cyan-400">
-                进入工作台
+                {tPage("landing.creatorCta")}
                 <span aria-hidden>→</span>
               </span>
             </Link>
@@ -203,17 +160,17 @@ export function LandingGate() {
             >
               <div className={cardInner}>
                 <span className="text-xs font-medium uppercase tracking-widest text-violet-300/90">
-                  Reader
+                  {tPage("landing.readerBadge")}
                 </span>
                 <h2 className="mt-4 text-2xl font-semibold text-white md:text-3xl">
-                  我是读者
+                  {tPage("landing.readerTitle")}
                 </h2>
                 <p className="mt-3 max-w-sm text-sm leading-relaxed text-zinc-400">
-                  书库与阅读体验（开发中）
+                  {tPage("landing.readerDesc")}
                 </p>
               </div>
               <span className="mt-8 inline-flex items-center gap-2 text-xs font-medium text-violet-400">
-                前往书库
+                {tPage("landing.readerCta")}
                 <span aria-hidden>→</span>
               </span>
             </Link>
@@ -222,8 +179,10 @@ export function LandingGate() {
 
         <section className="mt-12 w-full max-w-4xl rounded-2xl border border-white/10 bg-[#0b1320]/90 p-5 backdrop-blur-sm md:p-6">
           <div className="mb-5 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-white md:text-lg">网站开发进度</h2>
-            <span className="text-[11px] text-cyan-300/80">按时间由近到远</span>
+            <h2 className="text-base font-semibold text-white md:text-lg">
+              {tPage("landing.progressTitle")}
+            </h2>
+            <span className="text-[11px] text-cyan-300/80">{tPage("landing.progressOrder")}</span>
           </div>
 
           <div className="space-y-4">
@@ -247,7 +206,7 @@ export function LandingGate() {
 
       <footer className="relative z-10 border-t border-white/5 bg-black/20 px-6 py-6 backdrop-blur-md">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-center gap-3 sm:flex-row sm:gap-8">
-          <p className="text-xs text-zinc-500">连接钱包以继续创作与同步</p>
+          <p className="text-xs text-zinc-500">{tPage("landing.footerHint")}</p>
           {isConnected && address ? (
             <div className="flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-950/30 px-4 py-2">
               <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
@@ -267,8 +226,8 @@ export function LandingGate() {
             >
               <MetaMaskGlyph className="h-5 w-5" />
               {isConnectPending || status === "connecting"
-                ? "连接中…"
-                : "连接钱包以继续 · MetaMask"}
+                ? tPage("landing.connecting")
+                : tPage("landing.connectWallet")}
             </button>
           )}
         </div>

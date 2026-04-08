@@ -8,8 +8,9 @@ import "./globals.css";
  * 导致样式资源失败并可能影响 Hydration。改用语义清晰的系统/黑体栈（globals.css）。
  */
 export const metadata: Metadata = {
-  title: "Chenchen-Lib · AI 编辑平台",
-  description: "面向小说与剧本作者的 AI 编辑器（MiroFish 叙事推演）",
+  title: "Chenchen-Lib · AI writing platform",
+  description:
+    "AI-assisted editor for novels and scripts (MiroFish narrative tools). UI defaults to English; switch to Chinese in Workspace → Account.",
 };
 
 export default function RootLayout({
@@ -18,7 +19,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" className="h-full antialiased">
+    <html lang="en" className="h-full antialiased" suppressHydrationWarning>
       <body className="flex min-h-full flex-col font-sans">
         <AppProviders>{children}</AppProviders>
       </body>

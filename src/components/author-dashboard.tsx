@@ -8,6 +8,7 @@ import QRCode from "qrcode";
 
 import { WalletConnect } from "@/components/wallet-connect";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
+import { useSiteLocale } from "@/providers/site-locale-provider";
 import { chapterizeTxtViaApi, decodeTxtAuto } from "@/lib/txt-import-chapterize";
 import {
   derivePublishDisplayStatus,
@@ -137,11 +138,34 @@ const TRANSLATION_LANGUAGES: Array<{ code: string; label: string }> = [
   { code: "de", label: "德语" },
   { code: "es", label: "西班牙语" },
   { code: "ru", label: "俄语" },
+  { code: "ar", label: "阿拉伯语" },
   { code: "pt", label: "葡萄牙语" },
   { code: "it", label: "意大利语" },
   { code: "vi", label: "越南语" },
   { code: "th", label: "泰语" },
 ];
+
+const TRANSLATION_LANG_LABELS_EN: Record<string, string> = {
+  en: "English",
+  ja: "Japanese",
+  ko: "Korean",
+  fr: "French",
+  de: "German",
+  es: "Spanish",
+  ru: "Russian",
+  ar: "Arabic",
+  pt: "Portuguese",
+  it: "Italian",
+  vi: "Vietnamese",
+  th: "Thai",
+};
+
+function translationLangLabel(code: string, uiLocale: string): string {
+  if (uiLocale === "zh-CN") {
+    return TRANSLATION_LANGUAGES.find((l) => l.code === code)?.label ?? code;
+  }
+  return TRANSLATION_LANG_LABELS_EN[code] ?? code.toUpperCase();
+}
 
 const TRANSLATION_EDITOR_SESSION_PREFIX = "translation-editor-pair:";
 const ANALYTICS_EVENT_LABELS_ZH: Record<string, string> = {
@@ -161,14 +185,21 @@ const AUDIO_ACCEPT =
 
 const NOVEL_TXT_ACCEPT = ".txt,text/plain";
 
-function formatModified(iso: string) {
+function formatModified(iso: string, uiLocale: string) {
   try {
-    return new Date(iso).toLocaleString("zh-CN", {
+    return new Date(iso).toLocaleString(uiLocale, {
       dateStyle: "short",
       timeStyle: "short",
     });
   } catch {
-    return iso;
+    try {
+      return new Date(iso).toLocaleString("en-US", {
+        dateStyle: "short",
+        timeStyle: "short",
+      });
+    } catch {
+      return iso;
+    }
   }
 }
 
@@ -193,6 +224,7 @@ export function AuthorDashboard() {
     requestConnect,
     isConnectPending,
   } = useWeb3Auth();
+  const { t, locale } = useSiteLocale();
 
   const [tab, setTab] = useState<Tab>("novels");
   const [novels, setNovels] = useState<NovelListItem[]>([]);
@@ -1000,7 +1032,7 @@ export function AuthorDashboard() {
         defaultTargetLanguage?: string;
         error?: string;
       }>(res);
-      if (!res.ok) throw new Error(data.error ?? "保存失败");
+      if (!res.ok) throw new Error(data.error ?? t("settings.saveFailed"));
       const preferred =
         data.preferredLanguages && data.preferredLanguages.length > 0
           ? data.preferredLanguages
@@ -1009,9 +1041,9 @@ export function AuthorDashboard() {
       setPreferredTranslationLanguages(preferred);
       setDefaultTranslationLanguage(defaultLang);
       setTranslationTargetLanguage(defaultLang);
-      setPrefsMessage("翻译语言偏好已保存");
+      setPrefsMessage(t("settings.prefsSaved"));
     } catch (e) {
-      setPrefsMessage(e instanceof Error ? e.message : "保存失败");
+      setPrefsMessage(e instanceof Error ? e.message : t("settings.saveFailed"));
     } finally {
       setSavingPrefs(false);
     }
@@ -1443,7 +1475,8 @@ export function AuthorDashboard() {
 
     ctx.fillStyle = "#94a3b8";
     ctx.font = "26px sans-serif";
-    drawWrappedCenteredText(ctx, targetUrl, 540, 1100, 860, 38);
+    // Keep URL text clearly below QR frame; the QR white frame bottoms at y=1100.
+    drawWrappedCenteredTextClamped(ctx, targetUrl, 540, 1160, 860, 38, 3);
 
     ctx.fillStyle = "#22d3ee";
     ctx.font = "bold 28px sans-serif";
@@ -1489,9 +1522,9 @@ export function AuthorDashboard() {
     if (busy) {
       return (
         <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[var(--background)] px-4 text-neutral-800 dark:text-neutral-100">
-          <p className="text-sm font-medium">正在连接钱包…</p>
+          <p className="text-sm font-medium">{t("workspace.connectingTitle")}</p>
           <p className="text-center text-xs text-neutral-500 dark:text-neutral-400">
-            请在扩展或弹窗中完成授权
+            {t("workspace.connectingHint")}
           </p>
         </div>
       );
@@ -1499,11 +1532,9 @@ export function AuthorDashboard() {
 
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[var(--background)] px-4 text-center text-neutral-800 dark:text-neutral-100">
-        <p className="max-w-md text-sm font-medium">
-          使用工作台需要先连接钱包
-        </p>
+        <p className="max-w-md text-sm font-medium">{t("workspace.gateTitle")}</p>
         <p className="max-w-md text-xs text-neutral-500 dark:text-neutral-400">
-          若本机曾连接过，刷新后会自动恢复会话（无需重复弹窗）。首次使用或恢复失败时，请点击下方按钮连接。
+          {t("workspace.gateHint")}
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <button
@@ -1512,13 +1543,13 @@ export function AuthorDashboard() {
             disabled={isConnectPending}
             className="cursor-pointer rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
           >
-            连接钱包
+            {t("workspace.connectWallet")}
           </button>
           <Link
             href="/"
             className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium dark:border-neutral-600"
           >
-            返回首页
+            {t("workspace.backHome")}
           </Link>
         </div>
       </div>
@@ -1538,7 +1569,7 @@ export function AuthorDashboard() {
                 : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
             }
           >
-            我的小说
+            {t("workspace.tabNovels")}
           </button>
           <button
             type="button"
@@ -1549,7 +1580,7 @@ export function AuthorDashboard() {
                 : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
             }
           >
-            发布管理
+            {t("workspace.tabPublish")}
           </button>
           <button
             type="button"
@@ -1560,7 +1591,7 @@ export function AuthorDashboard() {
                 : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
             }
           >
-            账户设置
+            {t("workspace.tabSettings")}
           </button>
           <button
             type="button"
@@ -1571,7 +1602,7 @@ export function AuthorDashboard() {
                 : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
             }
           >
-            多语言翻译
+            {t("workspace.tabTranslation")}
           </button>
           <button
             type="button"
@@ -1582,7 +1613,7 @@ export function AuthorDashboard() {
                 : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
             }
           >
-            活跃钱包看板
+            {t("workspace.tabAnalytics")}
           </button>
           <button
             type="button"
@@ -1593,7 +1624,7 @@ export function AuthorDashboard() {
                 : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
             }
           >
-            工单管理
+            {t("workspace.tabTickets")}
           </button>
         </nav>
       </header>
@@ -1777,7 +1808,7 @@ export function AuthorDashboard() {
                                 <span className="mx-1.5 text-neutral-300 dark:text-neutral-600">
                                   ·
                                 </span>
-                                最后修改 {formatModified(entry.novel.lastModified)}
+                                最后修改 {formatModified(entry.novel.lastModified, locale)}
                               </span>
                               <button
                                 type="button"
@@ -1836,7 +1867,7 @@ export function AuthorDashboard() {
                             </p>
                           ) : null}
                           <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                            上传时间：{formatModified(entry.audiobook.updatedAt)}
+                            上传时间：{formatModified(entry.audiobook.updatedAt, locale)}
                           </p>
                           <audio controls src={entry.audiobook.url} className="mt-2 w-full" />
                         </div>
@@ -1870,7 +1901,7 @@ export function AuthorDashboard() {
                       derivePublishDisplayStatus(row.record) === "public" &&
                       Boolean(row.record?.articleId);
                     const ts = row.record?.publishedAt
-                      ? formatModified(row.record.publishedAt)
+                      ? formatModified(row.record.publishedAt, locale)
                       : "—";
                     return (
                       <li
@@ -2095,12 +2126,12 @@ export function AuthorDashboard() {
                   >
                     {TRANSLATION_LANGUAGES.map((lang) => (
                       <option key={lang.code} value={lang.code}>
-                        {lang.label}
+                        {translationLangLabel(lang.code, locale)}
                       </option>
                     ))}
                   </select>
                   <p className="mt-1 text-[11px] text-zinc-500">
-                    默认语言来自账户设置，可随时切换。
+                    {t("settings.defaultTargetHint")}
                   </p>
                 </div>
 
@@ -2450,7 +2481,7 @@ export function AuthorDashboard() {
                           </div>
                         ) : null}
                         <p className="mt-1 text-[10px] text-zinc-500">
-                          {ticket.createdBy} · {formatModified(ticket.createdAt)}
+                          {ticket.createdBy} · {formatModified(ticket.createdAt, locale)}
                         </p>
                         {ticket.adminNote ? (
                           <p className="mt-1 text-[11px] text-amber-300">
@@ -2493,16 +2524,18 @@ export function AuthorDashboard() {
 
         {tab === "settings" && (
           <div className="max-w-2xl space-y-4">
-            <h2 className="text-lg font-semibold">账户设置</h2>
+            <h2 className="text-lg font-semibold">{t("settings.title")}</h2>
             <p className="text-sm text-neutral-600 dark:text-neutral-400">
-              当前通过钱包地址标识作者身份。你可在此连接或断开钱包，并保存多语言翻译偏好。
+              {t("settings.blurb")}
             </p>
             <WalletConnect />
 
             <section className="space-y-3 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
-              <h3 className="text-sm font-semibold text-zinc-100">翻译语言偏好</h3>
+              <h3 className="text-sm font-semibold text-zinc-100">
+                {t("settings.translationPrefsTitle")}
+              </h3>
               <p className="text-xs text-zinc-400">
-                勾选常用目标语言，并设置默认翻译语言。多语言翻译模块会自动读取这里的配置。
+                {t("settings.translationPrefsBlurb")}
               </p>
               <div className="flex flex-wrap gap-2">
                 {TRANSLATION_LANGUAGES.map((lang) => (
@@ -2520,14 +2553,17 @@ export function AuthorDashboard() {
                       checked={preferredTranslationLanguages.includes(lang.code)}
                       onChange={() => handleTogglePreferredLanguage(lang.code)}
                     />
-                    {lang.label}
+                    {translationLangLabel(lang.code, locale)}
                   </label>
                 ))}
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-zinc-300">
-                  默认翻译语言
+                  {t("settings.defaultTargetLang")}
                 </label>
+                <p className="mb-2 text-[11px] text-zinc-500">
+                  {t("settings.defaultTargetHint")}
+                </p>
                 <select
                   value={defaultTranslationLanguage}
                   onChange={(e) => {
@@ -2539,8 +2575,7 @@ export function AuthorDashboard() {
                 >
                   {preferredTranslationLanguages.map((code) => (
                     <option key={code} value={code}>
-                      {TRANSLATION_LANGUAGES.find((l) => l.code === code)?.label ??
-                        code.toUpperCase()}
+                      {translationLangLabel(code, locale)}
                     </option>
                   ))}
                 </select>
@@ -2551,7 +2586,7 @@ export function AuthorDashboard() {
                 disabled={savingPrefs || preferredTranslationLanguages.length === 0}
                 className="rounded-lg border border-cyan-400/60 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {savingPrefs ? "保存中…" : "保存翻译偏好"}
+                {savingPrefs ? t("settings.savingPrefs") : t("settings.saveTranslationPrefs")}
               </button>
               {prefsMessage ? (
                 <p className="text-xs text-zinc-400">{prefsMessage}</p>

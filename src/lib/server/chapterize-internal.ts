@@ -342,6 +342,18 @@ function hasExplicitChapterMarks(text: string): boolean {
   );
 }
 
+/**
+ * 是否与 chapterizeTextInternal 一致：本会走豆包/LLM 路径（需付费会员）。
+ * rule、或 auto 且正文已有显式章节标、或 CHAPTERIZE_FORCE_REGEX_ONLY 时为 false。
+ */
+export function chapterizeNeedsModel(text: string, mode: ChapterizeMode): boolean {
+  if (mode === "llm") return true;
+  const forceRegexOnly = process.env.CHAPTERIZE_FORCE_REGEX_ONLY !== "0";
+  if (forceRegexOnly || mode === "rule") return false;
+  if (mode === "auto" && hasExplicitChapterMarks(text)) return false;
+  return true;
+}
+
 export function parseChapterizeMode(raw: unknown): ChapterizeMode {
   if (raw === "rule" || raw === "llm" || raw === "auto") return raw;
   return "auto";

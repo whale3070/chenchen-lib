@@ -3066,7 +3066,9 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
               chapters: mergedChapters,
               batchCount,
               anyTruncated,
-            } = await chapterizeTxtViaApi(text, chapterizeMode);
+            } = await chapterizeTxtViaApi(text, chapterizeMode, {
+              walletAddress: authorId,
+            });
 
             const volumeId = makePlotNodeId("plot-volume");
             const nextNodes: PlotNode[] = [

@@ -11,6 +11,7 @@ import type { AiReflowJobData } from "../lib/server/ai-reflow-queue";
 import { AI_REFLOW_QUEUE_NAME } from "../lib/server/ai-reflow-queue";
 import { createRedisConnection } from "../lib/server/ai-reflow-redis";
 import { autoFormatChaptersForPublish } from "../lib/server/deepseek-publish-format";
+import { isPaidMemberActive } from "../lib/server/paid-membership";
 import {
   readPublishRecordFs,
   writePublishRecordFs,
@@ -21,6 +22,16 @@ async function processReflow(data: AiReflowJobData) {
   let cur = await readPublishRecordFs(authorLower, novelId);
   if (!cur || (cur.aiReflowGeneration ?? 0) !== expectedGeneration) return;
   if (cur.aiReflowStatus !== "pending") return;
+
+  if (!(await isPaidMemberActive(authorLower))) {
+    await writePublishRecordFs({
+      ...cur,
+      aiReflowStatus: "error",
+      aiReflowError: "需要有效付费会员订阅才能执行 AI 排版",
+      aiReflowFinishedAt: new Date().toISOString(),
+    });
+    return;
+  }
 
   await writePublishRecordFs({
     ...cur,

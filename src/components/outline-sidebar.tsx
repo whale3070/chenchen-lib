@@ -35,6 +35,7 @@ import {
   resolveParentForNewChapter,
   type PlotOutlineNode,
 } from "@/lib/plot-outline";
+import { countTextForChineseWriting, stripHtmlForCount } from "@/lib/text-count";
 import type { PlotNode } from "@chenchen/shared/types";
 
 export type OutlineSidebarProps = {
@@ -119,6 +120,19 @@ function formatTagDisplay(t: string): string {
   return s.startsWith("#") ? s : `#${s}`;
 }
 
+function chapterWordCountFromNode(node: PlotOutlineNode): number {
+  const meta = (node.metadata ?? {}) as Record<string, unknown>;
+  const markdown =
+    typeof meta.chapterMarkdown === "string" ? meta.chapterMarkdown : "";
+  if (markdown.trim()) return countTextForChineseWriting(markdown);
+  const html =
+    (typeof meta.chapterHtml === "string" && meta.chapterHtml) ||
+    (typeof meta.chapterHtmlDesktop === "string" && meta.chapterHtmlDesktop) ||
+    (typeof meta.chapterHtmlMobile === "string" && meta.chapterHtmlMobile) ||
+    "";
+  return countTextForChineseWriting(stripHtmlForCount(html));
+}
+
 function SortableOutlineCard({
   node,
   depth,
@@ -132,6 +146,7 @@ function SortableOutlineCard({
   publishedChapterDirtyIds,
   onToggleChapterPublish,
   chapterPublishDisabled,
+  chapterIndexById,
 }: {
   node: PlotOutlineNode;
   depth: number;
@@ -145,6 +160,7 @@ function SortableOutlineCard({
   publishedChapterDirtyIds: Set<string>;
   onToggleChapterPublish?: (chapterId: string, publish: boolean) => Promise<void> | void;
   chapterPublishDisabled?: boolean;
+  chapterIndexById: ReadonlyMap<string, number>;
 }) {
   const {
     attributes,
@@ -172,6 +188,8 @@ function SortableOutlineCard({
 
   const active = node.id === activeOutlineId;
   const isChapter = node.kind === "chapter";
+  const chapterIndex = chapterIndexById.get(node.id);
+  const chapterWordCount = isChapter ? chapterWordCountFromNode(node) : 0;
   const isPublished = isChapter && publishedChapterIds.has(node.id);
   const isPublishDirty =
     isPublished && publishedChapterDirtyIds.has(node.id);
@@ -267,6 +285,11 @@ function SortableOutlineCard({
               className="w-full rounded border border-transparent bg-transparent text-sm font-medium text-neutral-900 placeholder:text-neutral-400 hover:border-neutral-200 focus:border-violet-400 focus:outline-none dark:text-neutral-50 dark:hover:border-neutral-600 dark:focus:border-violet-500"
               placeholder="标题"
             />
+            {isChapter ? (
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                第 {chapterIndex ?? "?"} 章 · 约 {chapterWordCount.toLocaleString("zh-CN")} 字
+              </p>
+            ) : null}
             <textarea
               value={node.summary ?? ""}
               onChange={(e) => onPatch(node.id, { summary: e.target.value })}
@@ -319,6 +342,7 @@ function SortableOutlineCard({
           publishedChapterDirtyIds={publishedChapterDirtyIds}
           onToggleChapterPublish={onToggleChapterPublish}
           chapterPublishDisabled={chapterPublishDisabled}
+          chapterIndexById={chapterIndexById}
         />
       ) : null}
     </div>
@@ -338,6 +362,7 @@ function OutlineBranch({
   publishedChapterDirtyIds,
   onToggleChapterPublish,
   chapterPublishDisabled,
+  chapterIndexById,
 }: {
   nodes: PlotOutlineNode[];
   depth: number;
@@ -351,6 +376,7 @@ function OutlineBranch({
   publishedChapterDirtyIds: Set<string>;
   onToggleChapterPublish?: (chapterId: string, publish: boolean) => Promise<void> | void;
   chapterPublishDisabled?: boolean;
+  chapterIndexById: ReadonlyMap<string, number>;
 }) {
   const ids = useMemo(() => nodes.map((n) => n.id), [nodes]);
   return (
@@ -372,6 +398,7 @@ function OutlineBranch({
                 publishedChapterDirtyIds={publishedChapterDirtyIds}
                 onToggleChapterPublish={onToggleChapterPublish}
                 chapterPublishDisabled={chapterPublishDisabled}
+                chapterIndexById={chapterIndexById}
               />
             </li>
           ))}
@@ -415,6 +442,16 @@ export function OutlineSidebar({
   );
 
   const [activeOutlineId, setActiveOutlineId] = useState<string | null>(null);
+  const chapterIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    let order = 0;
+    for (const n of nodes) {
+      if (n.kind !== "chapter") continue;
+      order += 1;
+      map.set(n.id, order);
+    }
+    return map;
+  }, [nodes]);
   /** 显式点选的大纲节点优先，否则跟随当前章节（用于高亮与「新增节」等工具栏锚点） */
   const outlineToolbarAnchorId = useMemo(
     () => activeOutlineId ?? activeChapterId ?? null,
@@ -872,6 +909,7 @@ export function OutlineSidebar({
                       publishedChapterDirtyIds={publishedChapterDirtySet}
                       onToggleChapterPublish={onToggleChapterPublish}
                       chapterPublishDisabled={chapterPublishDisabled}
+                      chapterIndexById={chapterIndexById}
                     />
                   </li>
                 ))}

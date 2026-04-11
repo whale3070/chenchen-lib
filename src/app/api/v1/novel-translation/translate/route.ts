@@ -4,6 +4,7 @@ import path from "node:path";
 import { isAddress } from "viem";
 
 import { NextResponse, type NextRequest } from "next/server";
+import { paidMemberForbiddenResponse } from "@/lib/server/paid-membership";
 import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 
 export const runtime = "nodejs";
@@ -509,6 +510,9 @@ export async function POST(req: NextRequest) {
   if (safeAuthorId(authorId) !== wh.walletLower) {
     return forbidden("authorId 必须与 x-wallet-address 一致");
   }
+
+  const subDeny = await paidMemberForbiddenResponse(wh.walletLower);
+  if (subDeny) return subDeny;
 
   const novelId = typeof o.novelId === "string" ? o.novelId.trim() : "";
   const sourceType =

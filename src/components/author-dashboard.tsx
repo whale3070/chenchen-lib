@@ -781,6 +781,7 @@ export function AuthorDashboard() {
       const { chapters, batchCount, anyTruncated } = await chapterizeTxtViaApi(
         text,
         "auto",
+        { walletAddress: wallet },
       );
       const importRes = await fetch("/api/v1/novels/from-chapters", {
         method: "POST",
@@ -1804,7 +1805,7 @@ export function AuthorDashboard() {
                             </Link>
                             <div className="flex items-center gap-2">
                               <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                                {entry.novel.wordCount.toLocaleString("zh-CN")} 字
+                                约 {entry.novel.wordCount.toLocaleString("zh-CN")} 字
                                 <span className="mx-1.5 text-neutral-300 dark:text-neutral-600">
                                   ·
                                 </span>

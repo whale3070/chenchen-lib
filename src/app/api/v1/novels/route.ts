@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { getDraftFilePath } from "@/lib/draft-path";
+import { countTextForChineseWriting, stripHtmlForCount } from "@/lib/text-count";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -78,17 +79,8 @@ function parseWalletHeader(req: NextRequest):
   return { ok: true, walletLower: safeAuthorId(headerAddr) };
 }
 
-function stripHtmlForCount(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\u00a0/g, " ");
-}
-
-/** 字数：剔除空白后的字符数（适合中文篇幅统计）。 */
 function countManuscriptChars(text: string): number {
-  return [...text.replace(/\s/g, "")].length;
+  return countTextForChineseWriting(text);
 }
 
 async function readDraftStats(

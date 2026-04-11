@@ -1,15 +1,26 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { isAddress } from "viem";
 
 import {
   ChapterizeHttpError,
+  chapterizeNeedsModel,
   chapterizeTextInternal,
   parseChapterizeMode,
 } from "@/lib/server/chapterize-internal";
+import { paidMemberForbiddenResponse } from "@/lib/server/paid-membership";
+import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+function unauthorized(message: string) {
+  return NextResponse.json({ error: message }, { status: 401 });
+}
+
+function safeAuthorId(id: string) {
+  return id.toLowerCase();
 }
 
 export async function POST(req: NextRequest) {
@@ -25,6 +36,15 @@ export async function POST(req: NextRequest) {
       ? (body as { text: string }).text
       : "";
   const mode = parseChapterizeMode((body as { mode?: unknown }).mode);
+
+  if (chapterizeNeedsModel(text, mode)) {
+    const headerAddr = req.headers.get("x-wallet-address")?.trim() ?? "";
+    if (!isAddress(headerAddr)) {
+      return unauthorized("使用 AI 切章请先连接钱包，并在请求中携带 x-wallet-address");
+    }
+    const deny = await paidMemberForbiddenResponse(safeAuthorId(headerAddr));
+    if (deny) return deny;
+  }
 
   try {
     const result = await chapterizeTextInternal(text, mode);

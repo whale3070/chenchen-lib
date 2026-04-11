@@ -3,9 +3,11 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import {
   ChapterizeHttpError,
+  chapterizeNeedsModel,
   chapterizeTextInternal,
   type ChapterizeMode,
 } from "@/lib/server/chapterize-internal";
+import { paidMemberForbiddenResponse } from "@/lib/server/paid-membership";
 import { persistNovelFromPlainChapters } from "@/lib/server/novel-from-txt-persist";
 import {
   buildChapterizeBatches,
@@ -118,6 +120,16 @@ export async function POST(req: NextRequest) {
 
   const mode: ChapterizeTxtMode =
     o.mode === "rule" || o.mode === "auto" ? o.mode : "auto";
+
+  const internalMode: ChapterizeMode = mode === "rule" ? "rule" : "auto";
+  if (mode === "auto") {
+    const batches = buildChapterizeBatches(text, 38000);
+    const anyNeedsLlm = batches.some((b) => chapterizeNeedsModel(b, internalMode));
+    if (anyNeedsLlm) {
+      const deny = await paidMemberForbiddenResponse(wh.walletLower);
+      if (deny) return deny;
+    }
+  }
 
   let chapters: Array<{ title: string; content: string }>;
   let batchCount: number;

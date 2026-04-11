@@ -9,6 +9,7 @@ export const runtime = "nodejs";
 type TtsRequest = {
   text?: unknown;
   speed?: unknown;
+  checkOnly?: unknown;
 };
 
 const MIN_SPEED = 0.6;
@@ -42,6 +43,10 @@ function normalizeSpeed(raw: unknown): number {
   if (raw < MIN_SPEED) return MIN_SPEED;
   if (raw > MAX_SPEED) return MAX_SPEED;
   return raw;
+}
+
+function normalizeCheckOnly(raw: unknown): boolean {
+  return raw === true;
 }
 
 function hashKey(text: string, speed: number): string {
@@ -141,20 +146,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (textChunks.length === 0) return badRequest("text is required");
 
   const speed = normalizeSpeed(body?.speed);
+  const checkOnly = normalizeCheckOnly(body?.checkOnly);
   const key = hashKey(text, speed);
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "ELEVENLABS_API_KEY is missing" },
-      { status: 500 },
-    );
-  }
 
   try {
     await fs.mkdir(CACHE_DIR, { recursive: true });
     const cachePath = path.join(CACHE_DIR, `${key}.mp3`);
     try {
       const cached = await fs.readFile(cachePath);
+      if (checkOnly) {
+        return NextResponse.json(
+          {
+            ok: true,
+            cacheHit: true,
+            cacheKey: key,
+          },
+          { status: 200 },
+        );
+      }
       return new NextResponse(cached, {
         status: 200,
         headers: {
@@ -172,6 +181,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           ? (e as NodeJS.ErrnoException).code
           : undefined;
       if (code !== "ENOENT") throw e;
+    }
+
+    if (checkOnly) {
+      return NextResponse.json(
+        {
+          ok: true,
+          cacheHit: false,
+          cacheKey: key,
+        },
+        { status: 200 },
+      );
+    }
+
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "ELEVENLABS_API_KEY is missing" },
+        { status: 500 },
+      );
     }
 
     const client = new ElevenLabsClient({ apiKey });

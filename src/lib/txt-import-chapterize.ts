@@ -109,6 +109,7 @@ const CHAPTERIZE_BATCH_MAX_CHARS = 38000;
 export async function chapterizeTxtViaApi(
   text: string,
   mode: ChapterizeTxtMode,
+  options?: { walletAddress?: string | null },
 ): Promise<{
   chapters: Array<{ title: string; content: string }>;
   batchCount: number;
@@ -118,12 +119,15 @@ export async function chapterizeTxtViaApi(
   if (batches.length === 0) {
     throw new Error("文本为空，无法切章");
   }
+  const wallet = options?.walletAddress?.trim() ?? "";
   const mergedChapters: Array<{ title: string; content: string }> = [];
   let anyTruncated = false;
   for (let i = 0; i < batches.length; i += 1) {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (wallet) headers["x-wallet-address"] = wallet;
     const r = await fetch("/api/v1/ai/chapterize", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ text: batches[i], mode }),
     });
     const data = (await r.json()) as {

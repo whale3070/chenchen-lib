@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:safe": "NODE_OPTIONS=--max-old-space-size=3072 nice -n 10 next build",
     "start": "next start",
     "worker:ai-reflow": "tsx src/workers/ai-reflow-worker.ts",
     "lint": "eslint"

@@ -1,17 +1,21 @@
 import type { Persona } from "@chenchen/shared/types";
+import { isAddress } from "viem";
 
 import type { EditorDeduceContext } from "@/lib/editor-context";
 
-const AI_BASE =
-  typeof process !== "undefined" && process.env.NEXT_PUBLIC_AI_SERVICE_URL
-    ? process.env.NEXT_PUBLIC_AI_SERVICE_URL
-    : "http://127.0.0.1:8787";
+const DEDUCE_PATH = "/api/v1/ai/deduce";
+const DEEP_STREAM_PATH = "/api/v1/ai/deep-stream";
+const MIROFISH_PING_PATH = "/api/v1/ai/mirofish-ping";
 
+/** 展示用：作者端 AI 经 Next 同源代理，不再直连 Python */
 export function getAiBaseUrl() {
-  return AI_BASE;
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/api/v1/ai`;
+  }
+  return "/api/v1/ai";
 }
 
-/** 与 services/ai 计费头一致；生产请配置 NEXT_PUBLIC_BILLING_USER_ID */
+/** 本地/无钱包时的占位；代理路由要求有效钱包地址（开发可设 AUTHOR_AI_SKIP_MEMBERSHIP_CHECK） */
 const BILLING_USER_ID =
   typeof process !== "undefined" && process.env.NEXT_PUBLIC_BILLING_USER_ID
     ? process.env.NEXT_PUBLIC_BILLING_USER_ID
@@ -24,9 +28,19 @@ export function setBillingUserOverride(id: string | null) {
   billingUserOverride = id;
 }
 
-function billingHeaders(): HeadersInit {
-  const id = billingUserOverride ?? BILLING_USER_ID;
-  return { "X-User-Id": id };
+function authorAiHeaders(extra?: Record<string, string>): HeadersInit {
+  const h: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...extra,
+  };
+  const fromWallet = billingUserOverride && isAddress(billingUserOverride);
+  const fallbackId = BILLING_USER_ID;
+  const addr =
+    fromWallet ? billingUserOverride! : isAddress(fallbackId) ? fallbackId : null;
+  if (addr) {
+    h["x-wallet-address"] = addr;
+  }
+  return h;
 }
 
 function personaPayload(personas: Persona[]) {
@@ -89,12 +103,9 @@ export async function postDeduce(params: {
         }
       : null,
   };
-  const res = await fetch(`${AI_BASE}/v1/deduce`, {
+  const res = await fetch(DEDUCE_PATH, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...billingHeaders(),
-    },
+    headers: authorAiHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -140,13 +151,9 @@ export async function streamDeepSimulation(
     start_simulation: params.startSimulation,
     max_rounds: params.maxRounds ?? 20,
   };
-  const res = await fetch(`${AI_BASE}/v1/mirofish/deep-stream`, {
+  const res = await fetch(DEEP_STREAM_PATH, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-      ...billingHeaders(),
-    },
+    headers: authorAiHeaders({ Accept: "text/event-stream" }),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -178,7 +185,7 @@ export async function streamDeepSimulation(
 
 export async function pingMirofish(): Promise<boolean> {
   try {
-    const res = await fetch(`${AI_BASE}/v1/mirofish/ping`);
+    const res = await fetch(MIROFISH_PING_PATH, { cache: "no-store" });
     return res.ok;
   } catch {
     return false;

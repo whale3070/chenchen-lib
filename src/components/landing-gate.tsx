@@ -195,7 +195,9 @@ export function LandingGate() {
                 <p className="mt-1 text-sm font-semibold text-zinc-100">{stage.title}</p>
                 <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs leading-6 text-zinc-300 md:text-sm">
                   {stage.items.map((item) => (
-                    <li key={`${stage.dateLabel}-${item}`}>{item}</li>
+                    <li key={`${stage.dateLabel}-${item}`}>
+                      <ProgressItemWithLinks text={item} />
+                    </li>
                   ))}
                 </ol>
               </article>
@@ -233,6 +235,39 @@ export function LandingGate() {
         </div>
       </footer>
     </div>
+  );
+}
+
+function trimUrlTrailingPunct(url: string): string {
+  return url.replace(/[.,;:!?）]+$/, "");
+}
+
+/** 将条目中的 http(s) URL 渲染为可点击外链（新标签打开） */
+function ProgressItemWithLinks({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s<>"'`]+)/gi);
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (!/^https?:\/\//i.test(part)) {
+          return <span key={i}>{part}</span>;
+        }
+        const href = trimUrlTrailingPunct(part);
+        const tail = part.slice(href.length);
+        return (
+          <span key={i} className="inline">
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all text-cyan-400 underline decoration-cyan-400/40 underline-offset-2 hover:text-cyan-300"
+            >
+              {href}
+            </a>
+            {tail}
+          </span>
+        );
+      })}
+    </>
   );
 }
 

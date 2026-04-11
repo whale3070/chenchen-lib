@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { enqueueAiReflowJob } from "@/lib/server/ai-reflow-queue";
+import { paidMemberForbiddenResponse } from "@/lib/server/paid-membership";
 import {
   readPublishRecordFs,
   safeNovelSegment,
@@ -374,6 +375,8 @@ export async function POST(req: NextRequest) {
     let reflowGeneration = next.aiReflowGeneration ?? 0;
 
     if (publish && layoutMode === "ai_reflow") {
+      const deny = await paidMemberForbiddenResponse(wh.walletLower);
+      if (deny) return deny;
       const p = withPendingAiReflow(next, [chapterId]);
       next = p.record;
       reflowGeneration = p.generation;
@@ -453,6 +456,8 @@ export async function POST(req: NextRequest) {
     let reflowGeneration = next.aiReflowGeneration ?? 0;
 
     if (layoutMode === "ai_reflow") {
+      const deny = await paidMemberForbiddenResponse(wh.walletLower);
+      if (deny) return deny;
       const p = withPendingAiReflow(next, allChapterIds);
       next = p.record;
       reflowGeneration = p.generation;
@@ -612,6 +617,11 @@ export async function POST(req: NextRequest) {
 
   const needsAsyncReflow =
     visibility === "public" && layoutMode === "ai_reflow" && allChapterIds.length > 0;
+
+  if (needsAsyncReflow) {
+    const deny = await paidMemberForbiddenResponse(wh.walletLower);
+    if (deny) return deny;
+  }
 
   let record: NovelPublishRecord;
   let aiReflowQueued = false;

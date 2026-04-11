@@ -45,7 +45,7 @@ const readerMarkdownComponents: Partial<Components> = {
     </td>
   ),
   pre: ({ children }) => (
-    <pre className="my-3 overflow-x-auto rounded-lg border border-zinc-600 bg-zinc-950/80 p-3 text-sm text-zinc-200">
+    <pre className="my-3 whitespace-pre-wrap break-words rounded-lg border border-zinc-600 bg-zinc-950/80 p-3 text-sm text-zinc-200 [overflow-wrap:anywhere]">
       {children}
     </pre>
   ),
@@ -58,7 +58,7 @@ const readerMarkdownComponents: Partial<Components> = {
         </code>
       );
     }
-    return <code className={className}>{children}</code>;
+    return <code className={`${className} break-words [overflow-wrap:anywhere]`}>{children}</code>;
   },
 };
 

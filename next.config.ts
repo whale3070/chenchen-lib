@@ -23,6 +23,7 @@ loadEnvConfig(repoRoot);
  */
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["whale3070.com", "localhost", "127.0.0.1"],
+  outputFileTracingRoot: repoRoot,
 };
 
 export default nextConfig;

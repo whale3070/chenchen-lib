@@ -6,6 +6,25 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 4 月 10 日（第十二天）",
+    title: "开发进度",
+    items: [
+      "付费会员 / 免费用户区分：凡从作者工作台、编辑器链路触发、最终会打到模型或 Python AI 服务的，一律视为「作者端 AI」，只对当前订阅有效的付费会员开放；未付费作者仍可用规则切章，仅 AI 切章要会员。",
+      "Aura 小说评估模块引擎已做好，尚未接入 Chenchen 文库前后端。榜单示例：http://198.55.109.102:3000/ranking?round_id=novel2026_kuake",
+      "本网站前端源码目录：`/root/chenchen-lib/apps/web`（Next.js / App Router）。",
+    ],
+  },
+  {
+    dateLabel: "2026 年 4 月 9 日（第十一天）",
+    title: "开发进度",
+    items: [
+      "新增评论功能，连接钱包后可以对章节进行评论",
+      "修改前端页面。当服务器已有缓存 MP3 时，前端会优先进入“播放已有 MP3”体验，而不是默认“朗读并生成 MP3”。",
+      "每个章节加上字数统计功能",
+      "读者端 Markdown 渲染里代码块/引用块的样式，给这类长内容加自动换行（保留可读性）",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 8 日（第十天）",
     title: "开发进度",
     items: [
@@ -120,6 +139,25 @@ const ZH: ProgressStage[] = [
 ];
 
 const EN: ProgressStage[] = [
+  {
+    dateLabel: "April 10, 2026 (day 12)",
+    title: "Progress",
+    items: [
+      "Paid vs free: all author-workspace / editor flows that ultimately call an LLM or the Python AI service are gated to authors with an active subscription; unpaid authors keep rule-based chapter splitting, while AI chapter split requires membership.",
+      "Aura novel-evaluation engine is ready but not yet integrated with Chenchen-Lib front/back. Sample ranking: http://198.55.109.102:3000/ranking?round_id=novel2026_kuake",
+      "Web app source lives under `apps/web` in the repo (example deploy path: `/root/chenchen-lib/apps/web`).",
+    ],
+  },
+  {
+    dateLabel: "April 9, 2026 (day 11)",
+    title: "Progress",
+    items: [
+      "Added chapter comments: users can comment after connecting wallet",
+      'Updated frontend audio UX: when server MP3 cache exists, default to "Play Cached MP3" instead of \"Generate MP3\"',
+      "Added per-chapter word count display",
+      "Reader markdown: long code/quoted blocks now auto-wrap while preserving readability",
+    ],
+  },
   {
     dateLabel: "April 8, 2026 (day 10)",
     title: "Progress",

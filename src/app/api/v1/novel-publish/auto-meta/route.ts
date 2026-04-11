@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { isPaidMemberActive } from "@/lib/server/paid-membership";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -228,7 +229,10 @@ export async function POST(req: NextRequest) {
     .slice(0, 180);
   const fallbackTags = ["原创", "连载", "中文"];
 
-  const ai = sample ? await callDeepseek(sample, workTitle) : null;
+  const ai =
+    sample && (await isPaidMemberActive(walletLower))
+      ? await callDeepseek(sample, workTitle)
+      : null;
   const synopsis = (ai?.synopsis || fallbackSynopsis || "这是一部连载作品。").slice(0, 5000);
   const tags = (ai?.tags && ai.tags.length > 0 ? ai.tags : fallbackTags).slice(0, 12);
   return NextResponse.json({ synopsis, tags, generatedBy: ai ? "deepseek" : "fallback" });

@@ -933,12 +933,13 @@ export async function GET(req: NextRequest) {
       totalChapters: chapters.length,
       language: targetLang,
       languageLabel: languageLabel(targetLang),
-      chapters: responseChapters.map(({ title, contentHtml, contentMarkdown }) => {
+      chapters: responseChapters.map(({ id, title, contentHtml, contentMarkdown }) => {
         const row: {
+          id: string;
           title: string;
           contentHtml: string;
           contentMarkdown?: string;
-        } = { title, contentHtml };
+        } = { id, title, contentHtml };
         if (typeof contentMarkdown === "string" && contentMarkdown.trim()) {
           row.contentMarkdown = contentMarkdown;
         }

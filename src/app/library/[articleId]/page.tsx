@@ -6,7 +6,9 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { ReaderChapterMarkdown } from "@/components/reader-chapter-markdown";
+import { ChapterComments } from "@/components/chapter-comments";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
+import { countTextForChineseWriting } from "@/lib/text-count";
 
 type ReaderArticle = {
   articleId: string;
@@ -21,6 +23,7 @@ type ReaderArticle = {
   unlocked: boolean;
   totalChapters: number;
   chapters: Array<{
+    id: string;
     title: string;
     contentHtml: string;
     /** 与作者端 chapterMarkdown 同步；存在时读者用 remark-gfm 渲染（含表格） */
@@ -165,6 +168,8 @@ export default function ReaderArticlePage({
   const [audioFileName, setAudioFileName] = useState("tts-ja.mp3");
   const [backgroundPlayEnabled, setBackgroundPlayEnabled] = useState(true);
   const [audioAutoplayPending, setAudioAutoplayPending] = useState(false);
+  const [hasServerCachedMp3, setHasServerCachedMp3] = useState(false);
+  const [checkingServerCachedMp3, setCheckingServerCachedMp3] = useState(false);
   const [visitedChapterIndexes, setVisitedChapterIndexes] = useState<Set<number>>(
     () => new Set([0]),
   );
@@ -204,6 +209,7 @@ export default function ReaderArticlePage({
           speakingUnavailable: "当前浏览器不支持朗读功能",
           noJaVoice: "未检测到日语语音包，已自动切换后端 MP3。",
           genMp3: "朗读并生成 MP3",
+          playCachedMp3: "播放已有 MP3",
           stopMp3: "停止生成",
           mp3Player: "音频播放",
           downloadMp3: "下载 MP3",
@@ -218,6 +224,7 @@ export default function ReaderArticlePage({
           close: "关闭",
           download: "下载本图片",
           generating: "生成二维码中…",
+          chapterWordsApprox: (n: number) => `本章约 ${n.toLocaleString("zh-CN")} 字`,
         }
       : {
           back: "← Back to Library",
@@ -248,6 +255,7 @@ export default function ReaderArticlePage({
           speakingUnavailable: "Text-to-speech is unavailable in this browser",
           noJaVoice: "No Japanese voice found. Switched to backend MP3.",
           genMp3: "Generate MP3",
+          playCachedMp3: "Play Cached MP3",
           stopMp3: "Stop",
           mp3Player: "Audio Player",
           downloadMp3: "Download MP3",
@@ -262,6 +270,7 @@ export default function ReaderArticlePage({
           close: "Close",
           download: "Download Image",
           generating: "Generating QR...",
+          chapterWordsApprox: (n: number) => `Approx. ${n.toLocaleString("en-US")} words/chars`,
         };
   const langZoneLabel = localizedLanguageLabel(
     article?.language,
@@ -358,6 +367,10 @@ export default function ReaderArticlePage({
     if (md) return md;
     return stripHtmlToPlainForReader(currentChapter?.contentHtml ?? "");
   }, [currentChapter]);
+  const currentChapterWordCount = useMemo(
+    () => countTextForChineseWriting(currentChapterPlainText),
+    [currentChapterPlainText],
+  );
   const supportsSpeech = typeof window !== "undefined" && "speechSynthesis" in window;
   const speechLocale = useMemo(
     () => resolveSpeechLocale(article?.language),
@@ -445,6 +458,34 @@ export default function ReaderArticlePage({
     supportsSpeech,
     voiceName,
   ]);
+
+  const checkServerCachedMp3 = useCallback(async () => {
+    if (!currentChapterPlainText.trim()) {
+      setHasServerCachedMp3(false);
+      return false;
+    }
+    setCheckingServerCachedMp3(true);
+    try {
+      const res = await fetch("/api/v1/tts/jp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: currentChapterPlainText,
+          speed: speakRate,
+          checkOnly: true,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { cacheHit?: boolean };
+      const hit = Boolean(res.ok && data.cacheHit);
+      setHasServerCachedMp3(hit);
+      return hit;
+    } catch {
+      setHasServerCachedMp3(false);
+      return false;
+    } finally {
+      setCheckingServerCachedMp3(false);
+    }
+  }, [currentChapterPlainText, speakRate]);
 
   const pauseSpeaking = useCallback(() => {
     if (!supportsSpeech) return;
@@ -820,6 +861,7 @@ export default function ReaderArticlePage({
   useEffect(() => {
     setAudioError("");
     setAudioBusy(false);
+    setHasServerCachedMp3(false);
     audioAbortRef.current?.abort();
     audioAbortRef.current = null;
     setAudioUrl((prev) => {
@@ -827,6 +869,19 @@ export default function ReaderArticlePage({
       return "";
     });
   }, [chapterIndex]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const hit = await checkServerCachedMp3();
+      if (cancelled || !hit) return;
+      setReaderTab("speak");
+      await handleGenerateMp3();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [checkServerCachedMp3, handleGenerateMp3]);
 
   useEffect(() => {
     return () => {
@@ -1010,9 +1065,14 @@ export default function ReaderArticlePage({
                 <h2 className="text-base font-semibold text-cyan-300">
                   {displayChapterTitle(chapterIndex, currentChapter?.title, uiLang)}
                 </h2>
-                <span className="text-xs text-zinc-400">
-                  第 {chapterIndex + 1} / {article.chapters.length} 章
-                </span>
+                <div className="text-right">
+                  <span className="block text-xs text-zinc-400">
+                    第 {chapterIndex + 1} / {article.chapters.length} 章
+                  </span>
+                  <span className="block text-[11px] text-zinc-500">
+                    {t.chapterWordsApprox(currentChapterWordCount)}
+                  </span>
+                </div>
               </div>
 
               <div className="mb-3 flex items-center gap-2">
@@ -1079,6 +1139,15 @@ export default function ReaderArticlePage({
                         />
                       )}
                     </article>
+                    <ChapterComments
+                      articleId={article.articleId}
+                      chapterId={currentChapter.id}
+                      address={address ?? undefined}
+                      isConnected={isConnected}
+                      isConnectPending={isConnectPending}
+                      requestConnect={requestConnect}
+                      uiLang={uiLang}
+                    />
                   </div>
                 ) : (
                   <p className="text-sm text-zinc-400">本章暂无内容。</p>
@@ -1090,10 +1159,10 @@ export default function ReaderArticlePage({
                       <button
                         type="button"
                         onClick={() => void handleGenerateMp3()}
-                        disabled={audioBusy}
+                        disabled={audioBusy || checkingServerCachedMp3}
                         className="rounded-md border border-cyan-500/50 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-950/30 disabled:opacity-40"
                       >
-                        {t.genMp3}
+                        {hasServerCachedMp3 ? t.playCachedMp3 : t.genMp3}
                       </button>
                       <button
                         type="button"

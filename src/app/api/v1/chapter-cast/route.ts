@@ -1,5 +1,6 @@
 import { isChapterCastFilePayload } from "@/lib/chapter-cast-validate";
 import {
+  deleteChapterCastFile,
   listChapterCastVersions,
   readChapterCastVersionFiles,
   writeChapterCastFile,
@@ -146,6 +147,71 @@ export async function PUT(req: NextRequest) {
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "写入失败";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+/** 删除单个人物 JSON 文件（付费或管理员，与 PUT 一致） */
+export async function DELETE(req: NextRequest) {
+  const wh = parseWalletHeader(req);
+  if (!wh.ok) return wh.res;
+
+  const deny = await paidMemberForbiddenResponse(wh.walletLower);
+  if (deny) return deny;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return badRequest("Invalid JSON");
+  }
+  if (!body || typeof body !== "object") return badRequest("Expected object body");
+  const o = body as Record<string, unknown>;
+
+  const authorId = typeof o.authorId === "string" ? o.authorId : "";
+  const novelId = typeof o.novelId === "string" ? o.novelId.trim() : "";
+  const chapterId = typeof o.chapterId === "string" ? o.chapterId.trim() : "";
+  const versionDir = typeof o.version === "string" ? o.version.trim() : "";
+  const fileName = typeof o.fileName === "string" ? o.fileName.trim() : "";
+
+  if (!isAddress(authorId)) return badRequest("Invalid authorId");
+  if (safeAuthorId(authorId) !== wh.walletLower) {
+    return forbidden("authorId 必须与 x-wallet-address 一致");
+  }
+  if (!novelId) return badRequest("Missing novelId");
+  if (!chapterId) return badRequest("Missing chapterId");
+  if (!/^v\d+$/.test(versionDir)) return badRequest("Invalid version");
+  if (!/^chapter\d+_[a-z0-9_]+\.json$/i.test(fileName)) {
+    return badRequest("Invalid fileName");
+  }
+
+  const versions = await listChapterCastVersions(wh.walletLower, novelId, chapterId);
+  if (!versions.includes(versionDir)) {
+    return notFound("该版本目录不存在");
+  }
+
+  const existing = await readChapterCastVersionFiles(
+    wh.walletLower,
+    novelId,
+    chapterId,
+    versionDir,
+  );
+  if (!existing.some((f) => f.fileName === fileName)) {
+    return notFound("文件不存在");
+  }
+
+  try {
+    await deleteChapterCastFile(
+      wh.walletLower,
+      novelId,
+      chapterId,
+      versionDir,
+      fileName,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "删除失败";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 

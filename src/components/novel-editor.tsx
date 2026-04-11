@@ -26,10 +26,7 @@ import { useSearchParams } from "next/navigation";
 import { OutlineSidebar } from "@/components/outline-sidebar";
 import { PublishNovelModal } from "@/components/publish-novel-modal";
 import { PersonaDetailCard } from "@/components/persona-detail";
-import {
-  PersonaSidebar,
-  type PersonaSidebarMode,
-} from "@/components/persona-sidebar";
+import { PersonaSidebar } from "@/components/persona-sidebar";
 import { SimulationPanel } from "@/components/simulation-panel";
 import { WalletConnect } from "@/components/wallet-connect";
 import { SelectionLock } from "@/extensions/selection-lock";
@@ -1057,8 +1054,6 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const [chapterPublishSubmitting, setChapterPublishSubmitting] = useState(false);
   const [chapterCastLoading, setChapterCastLoading] = useState(false);
   const [chapterCastRefreshKey, setChapterCastRefreshKey] = useState(0);
-  const [personaSidebarMode, setPersonaSidebarMode] =
-    useState<PersonaSidebarMode>("works");
   const [firstLineIndentEnabled, setFirstLineIndentEnabled] = useState(false);
   const markdownEditorPopupRef = useRef<Window | null>(null);
   const markdownEditorSessionTokenRef = useRef<string | null>(null);
@@ -2156,7 +2151,6 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         `已写入 ${data.count ?? 0} 个 JSON（${data.version ?? ""}）`,
       );
       setChapterCastRefreshKey((k) => k + 1);
-      setPersonaSidebarMode("chapterCast");
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "抽取失败");
     } finally {
@@ -2438,14 +2432,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   );
 
   const selected = personas.find((p) => p.id === selectedId) ?? null;
-  const showPersonaInspector =
-    manageTab === "personas" && personaSidebarMode === "works";
-
-  useEffect(() => {
-    if (manageTab !== "personas") {
-      setPersonaSidebarMode("works");
-    }
-  }, [manageTab]);
+  const showPersonaInspector = manageTab === "personas";
   const chapterNodes = useMemo(
     () => outlineNodes.filter((n) => n.kind === "chapter"),
     [outlineNodes],
@@ -3427,8 +3414,6 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           novelId={novelId}
           authorId={authorId}
           activeChapterId={activeChapterId}
-          sidebarMode={personaSidebarMode}
-          onSidebarModeChange={setPersonaSidebarMode}
           chapterCastRefreshKey={chapterCastRefreshKey}
           onChapterCastExtract={handleExtractChapterCast}
           chapterCastExtracting={chapterCastLoading}

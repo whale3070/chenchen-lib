@@ -192,3 +192,20 @@ export async function writeChapterCastFile(
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, fileName), JSON.stringify(payload, null, 2), "utf8");
 }
+
+export async function deleteChapterCastFile(
+  authorLower: string,
+  novelId: string,
+  chapterId: string,
+  versionDir: string,
+  fileName: string,
+): Promise<void> {
+  if (!/^v\d+$/.test(versionDir)) throw new Error("Invalid version");
+  if (!CAST_JSON_RE.test(fileName)) throw new Error("Invalid file name");
+  const fp = path.join(
+    chapterCastChapterDir(authorLower, novelId, chapterId),
+    versionDir,
+    fileName,
+  );
+  await fs.unlink(fp);
+}

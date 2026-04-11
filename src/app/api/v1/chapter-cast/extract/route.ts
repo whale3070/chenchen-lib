@@ -54,8 +54,15 @@ function extractJsonObject(text: string): string | null {
   return source.slice(start, end + 1);
 }
 
-function isValidNamePinyin(s: unknown): s is string {
-  return typeof s === "string" && /^[a-z0-9]{1,48}$/.test(s);
+/** 与落盘文件名规则一致：仅 a-z0-9；模型常输出连字符、空格或声调字母，在此归一化 */
+function normalizeNamePinyinSlug(raw: string): string {
+  const ascii = raw
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 48);
+  return ascii;
 }
 
 function parseCharacters(raw: unknown): ChapterCastCharacter[] | null {
@@ -65,20 +72,25 @@ function parseCharacters(raw: unknown): ChapterCastCharacter[] | null {
   if (arr.length > 80) return null;
   const out: ChapterCastCharacter[] = [];
   for (const item of arr) {
-    if (!item || typeof item !== "object") return null;
+    if (!item || typeof item !== "object") continue;
     const o = item as Record<string, unknown>;
     const name = typeof o.name === "string" ? o.name.trim() : "";
-    if (!name || name.length > 64) return null;
-    const pyMain =
-      typeof o.namePinyin === "string" ? o.namePinyin.trim().toLowerCase() : "";
-    const pyAlt =
-      typeof o.name_pinyin === "string" ? o.name_pinyin.trim().toLowerCase() : "";
-    const namePinyin = isValidNamePinyin(pyMain)
-      ? pyMain
-      : isValidNamePinyin(pyAlt)
-        ? pyAlt
-        : "";
-    if (!namePinyin) return null;
+    if (!name || name.length > 64) continue;
+    const pyCandidates = [
+      typeof o.namePinyin === "string" ? o.namePinyin : "",
+      typeof o.name_pinyin === "string" ? o.name_pinyin : "",
+      typeof o.slug === "string" ? o.slug : "",
+      typeof o.pinyin === "string" ? o.pinyin : "",
+    ];
+    let namePinyin = "";
+    for (const c of pyCandidates) {
+      const n = normalizeNamePinyinSlug(c.trim());
+      if (n.length > 0) {
+        namePinyin = n;
+        break;
+      }
+    }
+    if (!namePinyin) continue;
     const stableFromModel =
       typeof o.stableId === "string" ? o.stableId.trim().slice(0, 200) : "";
     const ch: ChapterCastCharacter = {
@@ -102,7 +114,7 @@ function parseCharacters(raw: unknown): ChapterCastCharacter[] | null {
     };
     out.push(ch);
   }
-  return out;
+  return out.length > 0 ? out : null;
 }
 
 export async function POST(req: NextRequest) {
@@ -152,7 +164,7 @@ export async function POST(req: NextRequest) {
     "规则：",
     "1) 「登场」指叙事中该人物实际在场、出场参与场景，不包括仅在对话里被他人提到但未出场的情况。",
     "2) 输出必须是单个 JSON 对象，且顶层键为 characters，值为数组。",
-    "3) 每个元素字段：name（中文名）, namePinyin（全小写拼音，仅 a-z0-9，用于文件名，无空格）, age, appearance, personality, location, presence（本章登场/戏份一句）, notes（可选）。",
+    "3) 每个元素字段：name（中文名）, namePinyin（小写拉丁字母与数字 0-9 即可，用于文件名；不要连字符、空格、声调符号）, age, appearance, personality, location, presence（本章登场/戏份一句）, notes（可选）。",
     "4) stableId 可选；若省略则由服务端生成。",
     "5) 不要输出 JSON 以外的任何文字。",
   ].join("\n");

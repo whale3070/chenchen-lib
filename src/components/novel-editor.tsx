@@ -1195,6 +1195,55 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     }
   }, [novelId, searchParams]);
 
+  /** /editor/:id/chapter-cast?… 重定向带来的查询：打开「角色设定」并选中章节 */
+  const chapterCastQueryConsumedRef = useRef(false);
+  useEffect(() => {
+    chapterCastQueryConsumedRef.current = false;
+  }, [novelId]);
+
+  useEffect(() => {
+    if (!resumeStateLoaded || typeof window === "undefined") return;
+    if (chapterCastQueryConsumedRef.current) return;
+
+    const open = searchParams.get("openChapterCast");
+    const urlChapterId = searchParams.get("chapterId")?.trim();
+    const urlChapterIndex = searchParams.get("chapterIndex")?.trim();
+    if (!open && !urlChapterId && !urlChapterIndex) return;
+
+    if (open === "1" || open === "true") {
+      setManageTab("personas");
+    }
+
+    if (urlChapterId) {
+      setActiveChapterIdSafe(urlChapterId);
+    } else if (urlChapterIndex) {
+      if (!outlineStructureReady) return;
+      const i = Number.parseInt(urlChapterIndex, 10);
+      const chapters = outlineNodes.filter((n) => n.kind === "chapter");
+      if (!Number.isNaN(i) && i >= 1 && i <= chapters.length) {
+        setActiveChapterIdSafe(chapters[i - 1]!.id);
+      }
+    }
+
+    chapterCastQueryConsumedRef.current = true;
+    const next = new URL(window.location.href);
+    next.searchParams.delete("openChapterCast");
+    next.searchParams.delete("chapterId");
+    next.searchParams.delete("chapterIndex");
+    const qs = next.searchParams.toString();
+    window.history.replaceState(
+      {},
+      "",
+      qs ? `${next.pathname}?${qs}` : next.pathname,
+    );
+  }, [
+    resumeStateLoaded,
+    outlineStructureReady,
+    outlineNodes,
+    searchParams,
+    setActiveChapterIdSafe,
+  ]);
+
   useEffect(() => {
     setNovelTitleForHeader(null);
     setBookPremise("");
@@ -2093,7 +2142,14 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       window.alert("请先连接钱包并在大纲中选中一章。");
       return;
     }
-    const chapterNodes = outlineNodes.filter((n) => n.kind === "chapter");
+    /** 先把当前 TipTap 正文合并进 outline，再取 HTML，避免富文本下编辑器与元数据不同步（如第二章仍用第一章 HTML） */
+    const ed = editorInstanceRef.current;
+    const mergedNodes =
+      ed && !ed.isDestroyed
+        ? upsertChapterBodyFromTipTapHtml(outlineNodes, activeChapterId, ed.getHTML())
+        : outlineNodes;
+    setOutlineNodes(mergedNodes);
+    const chapterNodes = mergedNodes.filter((n) => n.kind === "chapter");
     const idx = chapterNodes.findIndex((n) => n.id === activeChapterId);
     if (idx < 0) {
       window.alert("未找到当前章节。");
@@ -2103,12 +2159,8 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     const node = chapterNodes[idx]!;
     const bodySource = chapterBodySourceFromNode(node);
     let chapterHtml = "";
-    const ed = editorInstanceRef.current;
-    const edOk = Boolean(ed && !ed.isDestroyed);
     if (bodySource === "markdown") {
       chapterHtml = chapterCanonicalBodyHtml(node);
-    } else if (edOk) {
-      chapterHtml = ed!.getHTML();
     } else {
       chapterHtml = chapterHtmlFromNode(node) ?? "";
     }

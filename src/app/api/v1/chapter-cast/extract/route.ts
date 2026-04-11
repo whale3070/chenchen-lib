@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
     "1) 「登场」指叙事中该人物实际在场、出场参与场景，不包括仅在对话里被他人提到但未出场的情况。",
     "2) 输出必须是单个 JSON 对象，且顶层键为 characters，值为数组。",
     "3) 每个元素字段：name（中文名）, namePinyin（小写拉丁字母与数字 0-9 即可，用于文件名；不要连字符、空格、声调符号）, age, appearance, personality, location, presence（本章登场/戏份一句）, notes（可选）。",
-    "4) stableId 可选；若省略则由服务端生成。",
+    "4) stableId 可选：同一人物在全作品各章请使用**相同** stableId（便于跨章聚合）；若省略则由服务端生成「作品级」id（不含章节），各章抽取后 id 一致。",
     "5) 不要输出 JSON 以外的任何文字。",
   ].join("\n");
 
@@ -211,12 +211,12 @@ export async function POST(req: NextRequest) {
   }
 
   const novelSeg = safePathSegment(novelId);
-  const chapterSeg = safePathSegment(chapterId);
   const extractedAt = new Date().toISOString();
 
+  /** 作品级 stableId（不含 chapterId），跨章人物档案页按此聚合时间线 */
   for (const ch of characters) {
-    if (!ch.stableId) {
-      ch.stableId = `${novelSeg}_${chapterSeg}_${ch.namePinyin}`;
+    if (!ch.stableId?.trim()) {
+      ch.stableId = `${novelSeg}_${ch.namePinyin}`;
     }
   }
 

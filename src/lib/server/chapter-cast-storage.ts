@@ -9,7 +9,7 @@ export function safePathSegment(id: string, max = 96): string {
   return s || "x";
 }
 
-function chapterCastRoot(authorLower: string, novelId: string): string {
+export function chapterCastRoot(authorLower: string, novelId: string): string {
   return path.join(
     process.cwd(),
     ".data",
@@ -139,7 +139,7 @@ export async function listChapterCastVersions(
   }
 }
 
-const CAST_JSON_RE = /^chapter\d+_[a-z0-9_]+\.json$/i;
+export const CHAPTER_CAST_JSON_RE = /^chapter\d+_[a-z0-9_]+\.json$/i;
 
 export async function readChapterCastVersionFiles(
   authorLower: string,
@@ -162,7 +162,7 @@ export async function readChapterCastVersionFiles(
   }
   const out: Array<{ fileName: string; payload: ChapterCastFilePayload }> = [];
   for (const name of names.sort()) {
-    if (!CAST_JSON_RE.test(name)) continue;
+    if (!CHAPTER_CAST_JSON_RE.test(name)) continue;
     try {
       const raw = await fs.readFile(path.join(dir, name), "utf8");
       const trimmed = raw.trim();
@@ -186,7 +186,7 @@ export async function writeChapterCastFile(
   payload: ChapterCastFilePayload,
 ): Promise<void> {
   if (!/^v\d+$/.test(versionDir)) throw new Error("Invalid version");
-  if (!CAST_JSON_RE.test(fileName)) throw new Error("Invalid file name");
+  if (!CHAPTER_CAST_JSON_RE.test(fileName)) throw new Error("Invalid file name");
   if (!isChapterCastFilePayload(payload)) throw new Error("Invalid payload");
   const dir = path.join(chapterCastChapterDir(authorLower, novelId, chapterId), versionDir);
   await fs.mkdir(dir, { recursive: true });
@@ -201,7 +201,7 @@ export async function deleteChapterCastFile(
   fileName: string,
 ): Promise<void> {
   if (!/^v\d+$/.test(versionDir)) throw new Error("Invalid version");
-  if (!CAST_JSON_RE.test(fileName)) throw new Error("Invalid file name");
+  if (!CHAPTER_CAST_JSON_RE.test(fileName)) throw new Error("Invalid file name");
   const fp = path.join(
     chapterCastChapterDir(authorLower, novelId, chapterId),
     versionDir,

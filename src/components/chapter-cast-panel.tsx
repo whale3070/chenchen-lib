@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ChapterCastCharacter, ChapterCastFilePayload } from "@/types/chapter-cast";
@@ -308,22 +309,44 @@ export function ChapterCastPanel({
       {files.map((f) => {
         const sel = f.fileName === activeFile;
         const pres = f.payload.character.presence?.trim();
+        const arcKey =
+          f.payload.character.stableId.trim() ||
+          f.payload.character.namePinyin.trim().toLowerCase();
+        const arcHref =
+          arcKey.length > 0
+            ? `/editor/${encodeURIComponent(novelId)}/character/${encodeURIComponent(arcKey)}`
+            : null;
         return (
-          <li key={f.fileName} className="border-b border-neutral-100 last:border-b-0 dark:border-neutral-800">
+          <li
+            key={f.fileName}
+            className="flex border-b border-neutral-100 last:border-b-0 dark:border-neutral-800"
+          >
             <button
               type="button"
               role="option"
               aria-selected={sel}
               onClick={() => setActiveFile(f.fileName)}
               className={[
-                "flex w-full flex-col gap-0.5 px-3 py-2.5 text-left text-sm transition-colors lg:text-xs",
+                "flex min-w-0 flex-1 flex-col gap-0.5 px-3 py-2.5 text-left text-sm transition-colors lg:text-xs",
                 sel
                   ? "bg-violet-50 font-medium text-violet-900 dark:bg-violet-950/50 dark:text-violet-100"
                   : "text-neutral-800 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800/60",
               ].join(" ")}
               title={f.fileName}
             >
-              <span className="truncate">{f.payload.character.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{f.payload.character.name}</span>
+                {arcHref ? (
+                  <Link
+                    href={arcHref}
+                    onClick={(e) => e.stopPropagation()}
+                    className="shrink-0 rounded border border-violet-300/80 px-1.5 py-0.5 text-[10px] font-medium text-violet-800 hover:bg-violet-100 dark:border-violet-700 dark:text-violet-200 dark:hover:bg-violet-950/60"
+                    title="跨章档案（首次登场、结局、各章快照）"
+                  >
+                    档案
+                  </Link>
+                ) : null}
+              </span>
               {pres ? (
                 <span className="line-clamp-3 text-[11px] font-normal text-neutral-500 dark:text-neutral-400 lg:line-clamp-2 lg:text-[10px]">
                   {pres}

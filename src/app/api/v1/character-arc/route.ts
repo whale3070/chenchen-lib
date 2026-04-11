@@ -66,14 +66,19 @@ export async function GET(req: NextRequest) {
         }
       : null;
 
-  const displayFromCast =
-    timeline.length > 0
-      ? {
-          name: timeline[0]!.character.name,
-          namePinyin: timeline[0]!.character.namePinyin,
-          stableId: timeline[0]!.character.stableId.trim(),
-        }
-      : null;
+  const ch0 = timeline.length > 0 ? timeline[0]!.character : null;
+  const displayFromCast = ch0
+    ? {
+        name: ch0.name,
+        namePinyin: ch0.namePinyin,
+        stableId: ch0.stableId.trim(),
+        gender: ch0.gender?.trim() || undefined,
+        age: ch0.age?.trim() || undefined,
+        appearance: ch0.appearance?.trim() || undefined,
+        personality: ch0.personality?.trim() || undefined,
+        location: ch0.location?.trim() || undefined,
+      }
+    : null;
 
   return NextResponse.json({
     master,

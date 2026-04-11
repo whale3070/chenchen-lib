@@ -65,6 +65,36 @@ function normalizeNamePinyinSlug(raw: string): string {
   return ascii;
 }
 
+function parseInChapterStatusFromModel(o: Record<string, unknown>): ChapterCastCharacter["inChapterStatus"] {
+  const candidates = [
+    o.inChapterStatus,
+    o.chapter_status,
+    o.in_chapter_status,
+    o.thisChapterStatus,
+  ];
+  let raw = "";
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) {
+      raw = c.trim().toLowerCase().replace(/\s+/g, "_");
+      break;
+    }
+  }
+  if (!raw) return undefined;
+  if (raw === "injured" || raw === "hurt" || raw === "wounded") return "injured";
+  if (
+    raw === "deceased_this_chapter" ||
+    raw === "dead_this_chapter" ||
+    raw === "dead" ||
+    raw === "deceased" ||
+    raw === "died" ||
+    raw === "death_this_chapter"
+  ) {
+    return "deceased_this_chapter";
+  }
+  if (raw === "normal" || raw === "ok" || raw === "alive" || raw === "none") return undefined;
+  return undefined;
+}
+
 function parseCharacters(raw: unknown): ChapterCastCharacter[] | null {
   if (!raw || typeof raw !== "object") return null;
   const arr = (raw as { characters?: unknown }).characters;
@@ -93,10 +123,13 @@ function parseCharacters(raw: unknown): ChapterCastCharacter[] | null {
     if (!namePinyin) continue;
     const stableFromModel =
       typeof o.stableId === "string" ? o.stableId.trim().slice(0, 200) : "";
+    const inChapterStatus = parseInChapterStatusFromModel(o);
     const ch: ChapterCastCharacter = {
       stableId: stableFromModel || "",
       name,
       namePinyin,
+      gender: typeof o.gender === "string" ? o.gender.trim().slice(0, 64) : undefined,
+      inChapterStatus,
       age: typeof o.age === "string" ? o.age.trim().slice(0, 64) : undefined,
       appearance:
         typeof o.appearance === "string"
@@ -164,7 +197,7 @@ export async function POST(req: NextRequest) {
     "规则：",
     "1) 「登场」指叙事中该人物实际在场、出场参与场景，不包括仅在对话里被他人提到但未出场的情况。",
     "2) 输出必须是单个 JSON 对象，且顶层键为 characters，值为数组。",
-    "3) 每个元素字段：name（中文名）, namePinyin（小写拉丁字母与数字 0-9 即可，用于文件名；不要连字符、空格、声调符号）, age, appearance, personality, location, presence（本章登场/戏份一句）, notes（可选）。",
+    "3) 每个元素字段：name（中文名）, namePinyin（小写拉丁字母与数字 0-9 即可，用于文件名；不要连字符、空格、声调符号）, age, appearance, personality, location, presence（本章登场/戏份一句）, notes（可选）, inChapterStatus（可选，仅三选一：normal | injured | deceased_this_chapter；表示本章剧情内该人未受伤/受伤/在本章明确死亡或退场；勿因他人死亡或比喻乱填 deceased_this_chapter）。",
     "4) stableId 可选：同一人物在全作品各章请使用**相同** stableId（便于跨章聚合）；若省略则由服务端生成「作品级」id（不含章节），各章抽取后 id 一致。",
     "5) 不要输出 JSON 以外的任何文字。",
   ].join("\n");

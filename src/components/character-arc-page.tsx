@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { WalletConnect } from "@/components/wallet-connect";
+import type { ChapterCastCharacter } from "@/types/chapter-cast";
 import type {
   CharacterArcCustomRow,
   CharacterArcMaster,
@@ -17,30 +18,8 @@ const inputCls =
 const labelCls = "text-xs font-medium text-neutral-600 dark:text-neutral-400";
 const textareaCls = `${inputCls} min-h-[72px] resize-y`;
 
-/** 主档退场字段已填，或正文里出现典型死亡表述时，视为已故并素色展示页面 */
-const DEATH_SIGNAL_RE =
-  /死亡|身亡|遇难|阵亡|牺牲|身死|毙命|炸死|过世|殒命|离世|殉|遇害|毙了|气绝|断气|不幸身亡|当场身亡|爆炸死亡|已死|死了/;
-
-function collectTextForDeathSignal(
-  d: CharacterArcMaster,
-  tl: CharacterCastTimelineRow[],
-): string {
-  const custom = [...(d.customConstants ?? []), ...(d.customVariables ?? [])]
-    .map((r) => `${r.key}\n${r.value}`)
-    .join("\n");
-  const fromCast = tl
-    .flatMap((t) => [
-      t.character.presence,
-      t.character.notes,
-      t.character.appearance,
-      t.character.personality,
-    ])
-    .filter(Boolean)
-    .join("\n");
-  return [d.outcome, d.notes, custom, fromCast].filter(Boolean).join("\n");
-}
-
-function isCharacterDeceased(d: CharacterArcMaster | null, tl: CharacterCastTimelineRow[]): boolean {
+/** 仅当主档明确填写退场章（id 或章节序号）时素色展示；不因结局/备注/各章 JSON 关键词推断。 */
+function isCharacterDeceased(d: CharacterArcMaster | null): boolean {
   if (!d) return false;
   if (d.deathChapterId?.trim()) return true;
   if (
@@ -50,7 +29,98 @@ function isCharacterDeceased(d: CharacterArcMaster | null, tl: CharacterCastTime
   ) {
     return true;
   }
-  return DEATH_SIGNAL_RE.test(collectTextForDeathSignal(d, tl));
+  return false;
+}
+
+function norm(s: string | undefined | null): string {
+  return (s ?? "").replace(/\s+/g, " ").trim();
+}
+
+function sameMasterSnapshot(chapterVal: string | undefined, masterVal: string | undefined): boolean {
+  const a = norm(chapterVal);
+  const b = norm(masterVal);
+  return a.length > 0 && b.length > 0 && a === b;
+}
+
+/** 用时间线中章节序号最小的一章，仅填补主档仍为空的定设/变量字段 */
+function mergeBlankFromFirstTimelineChapter(
+  d: CharacterArcMaster,
+  tl: CharacterCastTimelineRow[],
+): CharacterArcMaster {
+  if (tl.length === 0) return d;
+  const first = [...tl].sort((a, b) => a.chapterIndex - b.chapterIndex || a.chapterId.localeCompare(b.chapterId))[0]!;
+  const ch = first.character;
+  const pick = (cur: string | undefined, fromCh: string | undefined) =>
+    norm(cur).length > 0 ? cur!.trim() : (fromCh?.trim() ?? "");
+  return {
+    ...d,
+    gender: pick(d.gender, ch.gender),
+    ageConst: pick(d.ageConst, ch.age),
+    appearanceConst: pick(d.appearanceConst, ch.appearance),
+    personalityVar: pick(d.personalityVar, ch.personality),
+    locationVar: pick(d.locationVar, ch.location),
+  };
+}
+
+/** 仅对照主档「变量」字段；与主档一致时不展示，避免与左侧定设及各章完整字段重复。 */
+function SnapshotDiffBlock({
+  draft,
+  ch,
+}: {
+  draft: CharacterArcMaster;
+  ch: ChapterCastCharacter;
+}) {
+  const rows: Array<{ label: string; chapter?: string; master?: string }> = [
+    { label: "性格", chapter: ch.personality, master: draft.personalityVar },
+    { label: "地点", chapter: ch.location, master: draft.locationVar },
+  ];
+
+  const blocks = rows.map(({ label, chapter, master }) => {
+    const cv = norm(chapter);
+    const mv = norm(master);
+    if (!cv && !mv) return null;
+    if (cv && mv && sameMasterSnapshot(chapter, master)) return null;
+    if (cv && mv && !sameMasterSnapshot(chapter, master)) {
+      return (
+        <div key={label} className="rounded-md bg-neutral-50 p-2 text-[11px] dark:bg-neutral-900/60">
+          <span className="font-semibold text-neutral-700 dark:text-neutral-200">{label}</span>
+          <p className="mt-1 text-neutral-800 dark:text-neutral-200">
+            <span className="text-neutral-500">本章：</span>
+            <span className="whitespace-pre-wrap">{chapter}</span>
+          </p>
+          <p className="mt-1 text-neutral-500">
+            <span>主档变量：</span>
+            <span className="whitespace-pre-wrap">{master || "（空）"}</span>
+          </p>
+        </div>
+      );
+    }
+    if (cv && !mv) {
+      return (
+        <div
+          key={label}
+          className="rounded-md border border-amber-200/70 bg-amber-50/50 p-2 text-[11px] dark:border-amber-900/40 dark:bg-amber-950/25"
+        >
+          <span className="font-semibold text-amber-900 dark:text-amber-200">
+            {label}（本章有、主档变量未填）
+          </span>
+          <p className="mt-1 whitespace-pre-wrap text-neutral-800 dark:text-neutral-200">{chapter}</p>
+        </div>
+      );
+    }
+    return null;
+  });
+
+  if (!blocks.some(Boolean)) return null;
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-neutral-200/80 pt-3 dark:border-neutral-700/80">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+        与主档变量对照（仅在有差异或本章独有时显示）
+      </p>
+      {blocks}
+    </div>
+  );
 }
 
 type Props = { novelId: string; stableId: string };
@@ -59,7 +129,16 @@ type ApiGet = {
   master: CharacterArcMaster | null;
   timeline: CharacterCastTimelineRow[];
   inferredFirst: { chapterId: string; chapterIndex: number } | null;
-  displayFromCast: { name: string; namePinyin: string; stableId: string } | null;
+  displayFromCast: {
+    name: string;
+    namePinyin: string;
+    stableId: string;
+    gender?: string;
+    age?: string;
+    appearance?: string;
+    personality?: string;
+    location?: string;
+  } | null;
 };
 
 function normalizeMaster(m: CharacterArcMaster): CharacterArcMaster {
@@ -100,15 +179,15 @@ function emptyMaster(
     outcome: "",
     notes: "",
     updatedAt: now,
-    gender: "",
-    ageConst: "",
+    gender: hint?.gender?.trim() ?? "",
+    ageConst: hint?.age?.trim() ?? "",
     birthBackground: "",
-    appearanceConst: "",
-    personalityVar: "",
+    appearanceConst: hint?.appearance?.trim() ?? "",
+    personalityVar: hint?.personality?.trim() ?? "",
     skills: "",
     luck: "",
     combatPower: "",
-    locationVar: "",
+    locationVar: hint?.location?.trim() ?? "",
     customConstants: [],
     customVariables: [],
   };
@@ -329,10 +408,11 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
 
   const displayName = draft?.name ?? stableKey;
 
-  const deceased = useMemo(
-    () => isCharacterDeceased(draft, timeline),
-    [draft, timeline],
-  );
+  const deceased = useMemo(() => isCharacterDeceased(draft), [draft]);
+
+  const handleMergeBlankFromFirstTimeline = useCallback(() => {
+    setDraft((d) => (d && timeline.length > 0 ? mergeBlankFromFirstTimelineChapter(d, timeline) : d));
+  }, [timeline]);
 
   return (
     <div
@@ -348,7 +428,7 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
           role="status"
           className="shrink-0 border-b border-neutral-500/40 bg-neutral-500/25 px-4 py-2 text-center text-xs text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800/80 dark:text-neutral-400"
         >
-          已检测到退场/死亡相关描述（主档退场信息或各章 JSON 文案），本页以淡灰素色展示。
+          主档已填写退场章节（退场章 id 或章节序号），本页以淡灰素色展示。
         </div>
       ) : null}
       <header
@@ -430,27 +510,50 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
         ) : null}
 
         {!loading && authorId && draft ? (
-          <>
-            <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">人物设定</h2>
-                  <p className="mt-1 max-w-3xl text-[11px] text-neutral-500 dark:text-neutral-400">
-                    左侧为<strong>常量</strong>（姓名、性别、年龄定设、出身、长相等）；右侧为<strong>变量</strong>（性格、技能、幸运、武力、位置等）。两侧均可<strong>自增字段行</strong>，保存后主档 JSON 一并写入。
-                  </p>
+          <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(280px,360px)_1fr] lg:items-start lg:gap-8">
+            <aside className="min-w-0 space-y-4 lg:sticky lg:top-4 lg:max-h-[min(100dvh-5rem,920px)] lg:overflow-y-auto lg:pr-1">
+              <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+                      定设（常量）
+                    </h2>
+                    <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                      姓名、出身、长相等跨章稳定信息；与右侧<strong>变量</strong>、下方各章 JSON 对照编辑。
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={saving || timeline.length === 0}
+                      onClick={handleMergeBlankFromFirstTimeline}
+                      title="按章节序号取最小一章，仅写入主档仍为空的年龄/外貌/性格/地点"
+                      className="rounded-lg border border-amber-500/40 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-40 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-100 dark:hover:bg-amber-950/70"
+                    >
+                      首章快照填空白
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void handleSave()}
+                      className="rounded-lg border border-violet-500/50 bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40"
+                    >
+                      {saving ? "保存中…" : "保存主档"}
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => void handleSave()}
-                  className="rounded-lg border border-violet-500/50 bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40"
-                >
-                  {saving ? "保存中…" : "保存主档"}
-                </button>
-              </div>
+                {timeline.length > 0 &&
+                (norm(draft.gender).length === 0 ||
+                  norm(draft.ageConst).length === 0 ||
+                  norm(draft.appearanceConst).length === 0 ||
+                  norm(draft.personalityVar).length === 0 ||
+                  norm(draft.locationVar).length === 0) ? (
+                  <p className="mt-2 rounded-md border border-amber-200/80 bg-amber-50/60 px-2 py-1.5 text-[10px] text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+                    主档性别、年龄、外貌、性格、地点若有空白，可用「首章快照填空白」从<strong>时间线章节序号最小</strong>的一章拷贝，不会覆盖已填写内容。
+                  </p>
+                ) : null}
 
-              <div className="mt-4 grid gap-6 lg:grid-cols-2">
-                <div className="rounded-lg border border-amber-200/80 bg-amber-50/40 p-4 dark:border-amber-900/40 dark:bg-amber-950/20">
+                <div className="mt-4 rounded-lg border border-amber-200/80 bg-amber-50/40 p-4 dark:border-amber-900/40 dark:bg-amber-950/20">
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-900 dark:text-amber-200">
                     常量（很少改动）
                   </h3>
@@ -541,10 +644,20 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
                     onChange={(next) => setDraft((d) => (d ? { ...d, customConstants: next } : d))}
                   />
                 </div>
+              </section>
+            </aside>
 
-                <div className="rounded-lg border border-cyan-200/80 bg-cyan-50/40 p-4 dark:border-cyan-900/40 dark:bg-cyan-950/20">
+            <div className="min-w-0 space-y-6">
+              <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+                <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+                  变量（随剧情）
+                </h2>
+                <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                  性格、技能、位置等会随章变化；各章卡片会与这里对照标出差异。
+                </p>
+                <div className="mt-4 rounded-lg border border-cyan-200/80 bg-cyan-50/40 p-4 dark:border-cyan-900/40 dark:bg-cyan-950/20">
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-cyan-900 dark:text-cyan-200">
-                    变量（随剧情更新）
+                    主档变量
                   </h3>
                   <div className="mt-3 space-y-3">
                     <div>
@@ -606,8 +719,7 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
                     onChange={(next) => setDraft((d) => (d ? { ...d, customVariables: next } : d))}
                   />
                 </div>
-              </div>
-            </section>
+              </section>
 
             <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
               <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">剧情线</h2>
@@ -710,14 +822,6 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
                   />
                 </div>
               </div>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void handleSave()}
-                className="mt-4 rounded-lg border border-violet-500/50 bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40 lg:hidden"
-              >
-                {saving ? "保存中…" : "保存主档"}
-              </button>
             </section>
 
             <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
@@ -745,7 +849,11 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
                         </p>
                         <Link
                           href={`/editor/${encodeURIComponent(novelId)}/chapter-cast?chapterId=${encodeURIComponent(row.chapterId)}`}
-                          className="text-[11px] font-medium text-violet-600 hover:underline dark:text-violet-400"
+                          className={
+                            deceased
+                              ? "text-[11px] font-medium text-neutral-600 hover:underline dark:text-neutral-500"
+                              : "text-[11px] font-medium text-violet-600 hover:underline dark:text-violet-400"
+                          }
                         >
                           在大开本中打开
                         </Link>
@@ -754,12 +862,33 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
                         {row.version} / <span className="font-mono">{row.fileName}</span>
                       </p>
                       {row.character.presence ? (
-                        <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">
-                          {row.character.presence}
-                        </p>
-                      ) : null}
+                        <div
+                          className={[
+                            "mt-3 rounded-lg border px-3 py-2.5",
+                            deceased
+                              ? "border-neutral-400/50 bg-neutral-200/40 dark:border-neutral-600 dark:bg-neutral-800/50"
+                              : "border-violet-300/70 bg-violet-50/80 dark:border-violet-800/50 dark:bg-violet-950/35",
+                          ].join(" ")}
+                        >
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                            在场 / 戏份（presence）
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                            {row.character.presence}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">本章未填写 presence。</p>
+                      )}
+                      <SnapshotDiffBlock draft={draft} ch={row.character} />
                       <details className="mt-2 text-xs">
-                        <summary className="cursor-pointer text-violet-600 dark:text-violet-400">
+                        <summary
+                          className={
+                            deceased
+                              ? "cursor-pointer text-neutral-600 hover:underline dark:text-neutral-400"
+                              : "cursor-pointer text-violet-600 hover:underline dark:text-violet-400"
+                          }
+                        >
                           本章完整字段
                         </summary>
                         <dl className="mt-2 space-y-1 text-neutral-600 dark:text-neutral-400">
@@ -800,7 +929,17 @@ export function CharacterArcPage({ novelId, stableId }: Props) {
                 </ol>
               )}
             </section>
-          </>
+
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void handleSave()}
+                className="w-full rounded-lg border border-violet-500/50 bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40 lg:hidden"
+              >
+                {saving ? "保存中…" : "保存主档"}
+              </button>
+            </div>
+          </div>
         ) : null}
       </main>
     </div>

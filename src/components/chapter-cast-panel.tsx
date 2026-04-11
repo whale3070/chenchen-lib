@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
-import type { ChapterCastCharacter, ChapterCastFilePayload } from "@/types/chapter-cast";
+import type {
+  ChapterCastCharacter,
+  ChapterCastFilePayload,
+  InChapterCastStatus,
+} from "@/types/chapter-cast";
 
 type ListFile = { fileName: string; payload: ChapterCastFilePayload };
 
@@ -14,6 +18,104 @@ const labelCls = "text-xs text-neutral-500 dark:text-neutral-400";
 
 function draftFromPayload(p: ChapterCastFilePayload): ChapterCastCharacter {
   return { ...p.character };
+}
+
+function inChapterStatusOf(ch: ChapterCastCharacter): InChapterCastStatus {
+  return ch.inChapterStatus ?? "normal";
+}
+
+function listPersonRowButtonClass(sel: boolean, status: InChapterCastStatus): string {
+  const base =
+    "flex min-w-0 flex-1 flex-col gap-0.5 border-l-4 px-3 py-2.5 text-left text-sm transition-colors lg:text-xs";
+  const selBorder = sel ? "border-l-violet-500" : "border-l-transparent";
+
+  if (status === "deceased_this_chapter") {
+    return [
+      base,
+      selBorder,
+      "grayscale",
+      sel
+        ? "bg-violet-50/90 font-medium text-neutral-800 dark:bg-violet-950/40 dark:text-neutral-200"
+        : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800/80",
+    ].join(" ");
+  }
+  if (status === "injured") {
+    return [
+      base,
+      selBorder,
+      sel
+        ? "bg-rose-100 font-medium text-rose-950 dark:bg-rose-950/55 dark:text-rose-50"
+        : "bg-rose-50/60 text-rose-950 hover:bg-rose-100/80 dark:bg-rose-950/30 dark:text-rose-100 dark:hover:bg-rose-950/45",
+    ].join(" ");
+  }
+  return [
+    base,
+    selBorder,
+    sel
+      ? "bg-violet-50 font-medium text-violet-900 dark:bg-violet-950/50 dark:text-violet-100"
+      : "text-neutral-800 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800/60",
+  ].join(" ");
+}
+
+function chapterFormShellClass(status: InChapterCastStatus): string {
+  if (status === "deceased_this_chapter") {
+    return "rounded-xl border border-neutral-300/90 bg-neutral-100/95 p-3 grayscale sm:p-4 dark:border-neutral-600 dark:bg-neutral-900/85";
+  }
+  if (status === "injured") {
+    return "rounded-xl border border-rose-300/80 bg-rose-50/75 p-3 sm:p-4 dark:border-rose-900/50 dark:bg-rose-950/45";
+  }
+  return "";
+}
+
+function InChapterStatusField({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: InChapterCastStatus;
+  onChange: (v: InChapterCastStatus) => void;
+  disabled?: boolean;
+}) {
+  const gid = useId();
+  return (
+    <div className="rounded-lg border border-neutral-200/90 bg-neutral-50/40 p-3 dark:border-neutral-700 dark:bg-neutral-900/40">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-300">
+        本章剧情状态
+      </p>
+      <p className="mb-2 text-[10px] leading-snug text-neutral-500 dark:text-neutral-400">
+        仅影响本页人物列表与编辑区底色；与跨章主档退场字段无关。
+      </p>
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        {(
+          [
+            ["normal", "正常"],
+            ["injured", "受伤（淡红）"],
+            ["deceased_this_chapter", "本章死亡/退场（灰色）"],
+          ] as const
+        ).map(([v, lab]) => (
+          <label
+            key={v}
+            className={[
+              "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs",
+              value === v
+                ? "border-violet-500/60 bg-violet-50 text-violet-950 dark:border-violet-500/50 dark:bg-violet-950/50 dark:text-violet-50"
+                : "border-neutral-200/80 bg-white text-neutral-800 hover:border-neutral-300 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-200",
+            ].join(" ")}
+          >
+            <input
+              type="radio"
+              name={gid}
+              className="shrink-0"
+              checked={value === v}
+              disabled={disabled}
+              onChange={() => onChange(v)}
+            />
+            <span>{lab}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 type Props = {
@@ -242,8 +344,8 @@ export function ChapterCastPanel({
   const toolbar = (
     <div
       className={[
-        "shrink-0 space-y-2 px-2 pt-1",
-        variant === "wide" ? "lg:flex lg:flex-row lg:items-end lg:gap-3 lg:space-y-0" : "",
+        "shrink-0 flex flex-wrap items-center gap-2 px-2 pt-0.5",
+        variant === "wide" ? "" : "flex-col items-stretch",
       ].join(" ")}
     >
       <button
@@ -251,17 +353,22 @@ export function ChapterCastPanel({
         disabled={extractDisabled || extractLoading}
         onClick={() => void onExtract()}
         className={[
-          "rounded-lg border border-violet-400/80 bg-violet-50 px-2 py-2 text-xs font-medium text-violet-950 disabled:cursor-not-allowed disabled:opacity-45 dark:border-violet-600 dark:bg-violet-950/40 dark:text-violet-100",
-          variant === "wide" ? "w-full lg:flex-1" : "w-full",
+          "rounded-md border border-violet-400/80 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-950 disabled:cursor-not-allowed disabled:opacity-45 dark:border-violet-600 dark:bg-violet-950/40 dark:text-violet-100",
+          variant === "wide" ? "w-full sm:w-auto" : "w-full",
         ].join(" ")}
       >
-        {extractLoading ? "AI 正在分析本章正文…" : "AI 抽取本章登场人物"}
+        {extractLoading ? "分析中…" : "AI 抽取登场人物"}
       </button>
       {versions.length > 0 ? (
-        <div className={variant === "wide" ? "w-full shrink-0 lg:w-52" : ""}>
-          <label className={labelCls}>版本</label>
+        <div
+          className={[
+            "flex min-w-0 items-center gap-1.5",
+            variant === "wide" ? "w-full sm:w-auto sm:shrink-0" : "w-full",
+          ].join(" ")}
+        >
+          <label className={`${labelCls} shrink-0 whitespace-nowrap text-[10px]`}>版本</label>
           <select
-            className={`${inputCls} mt-0.5`}
+            className={`${inputCls} mt-0 min-h-0 flex-1 py-1 text-xs sm:max-w-[8rem] sm:flex-none`}
             value={(versionPicker ?? resolvedVersion) || ""}
             onChange={(e) => setVersionPicker(e.target.value || null)}
           >
@@ -309,6 +416,7 @@ export function ChapterCastPanel({
       {files.map((f) => {
         const sel = f.fileName === activeFile;
         const pres = f.payload.character.presence?.trim();
+        const rowStatus = inChapterStatusOf(f.payload.character);
         const arcKey =
           f.payload.character.stableId.trim() ||
           f.payload.character.namePinyin.trim().toLowerCase();
@@ -326,16 +434,21 @@ export function ChapterCastPanel({
               role="option"
               aria-selected={sel}
               onClick={() => setActiveFile(f.fileName)}
-              className={[
-                "flex min-w-0 flex-1 flex-col gap-0.5 px-3 py-2.5 text-left text-sm transition-colors lg:text-xs",
-                sel
-                  ? "bg-violet-50 font-medium text-violet-900 dark:bg-violet-950/50 dark:text-violet-100"
-                  : "text-neutral-800 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800/60",
-              ].join(" ")}
+              className={listPersonRowButtonClass(sel, rowStatus)}
               title={f.fileName}
             >
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate">{f.payload.character.name}</span>
+                {rowStatus === "injured" ? (
+                  <span className="shrink-0 rounded bg-rose-200/90 px-1 py-px text-[9px] font-semibold text-rose-950 dark:bg-rose-900/80 dark:text-rose-100">
+                    伤
+                  </span>
+                ) : null}
+                {rowStatus === "deceased_this_chapter" ? (
+                  <span className="shrink-0 rounded bg-neutral-500/35 px-1 py-px text-[9px] font-semibold text-neutral-800 dark:bg-neutral-600 dark:text-neutral-100">
+                    亡
+                  </span>
+                ) : null}
                 {arcHref ? (
                   <Link
                     href={arcHref}
@@ -361,10 +474,21 @@ export function ChapterCastPanel({
 
   const formInner =
     draft && basePayload ? (
-      <div className="space-y-3 pt-1 lg:space-y-4">
+      <div
+        className={[chapterFormShellClass(inChapterStatusOf(draft)), "min-h-0 space-y-3 pt-1 lg:space-y-4"]
+          .filter(Boolean)
+          .join(" ")}
+      >
         <p className="text-[10px] text-neutral-400 dark:text-neutral-500">
           文件 <span className="font-mono">{activeFile}</span>
         </p>
+        <InChapterStatusField
+          value={inChapterStatusOf(draft)}
+          disabled={saving || deleting}
+          onChange={(v) =>
+            setDraft((d) => (d ? { ...d, inChapterStatus: v === "normal" ? undefined : v } : d))
+          }
+        />
         <div className="rounded-lg border border-neutral-100 bg-neutral-50/50 p-3 dark:border-neutral-800 dark:bg-neutral-900/30">
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
             标识
@@ -558,7 +682,11 @@ export function ChapterCastPanel({
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
             {draft && basePayload ? (
-              <div className="space-y-2 pt-2">
+              <div
+                className={[chapterFormShellClass(inChapterStatusOf(draft)), "space-y-2 pt-2"]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
                 <p className="text-[10px] text-neutral-400 dark:text-neutral-500">
                   文件 <span className="font-mono">{activeFile}</span>
                 </p>
@@ -603,6 +731,15 @@ export function ChapterCastPanel({
                     }
                   />
                 </div>
+                <InChapterStatusField
+                  value={inChapterStatusOf(draft)}
+                  disabled={saving || deleting}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, inChapterStatus: v === "normal" ? undefined : v } : d,
+                    )
+                  }
+                />
                 <div>
                   <label className={labelCls}>年龄</label>
                   <input

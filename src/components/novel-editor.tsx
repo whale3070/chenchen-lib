@@ -3216,7 +3216,12 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             ];
 
             setOutlineNodes(nextNodes);
-            void postOutlineStructure(nextNodes, { mode: "full" });
+            await postOutlineStructure(nextNodes, { mode: "full" });
+            /** 全量切章只把正文留在本地 metadata；structure POST 会剥离 chapterHtml，必须逐章写入 chapter-content，否则侧栏字数与刷新后正文均为 0 */
+            for (const n of nextNodes) {
+              if (n.kind !== "chapter") continue;
+              await postChapterContent(n);
+            }
             const latestChapterIds = nextNodes
               .filter((n) => n.kind === "chapter")
               .map((n) => n.id);
@@ -3290,6 +3295,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       editorInstance,
       flushWritingContext,
       novelId,
+      postChapterContent,
       postOutlineStructure,
       publishLayoutMode,
       publishRecord?.visibility,

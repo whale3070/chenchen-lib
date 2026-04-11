@@ -13,18 +13,25 @@ function isValidNamePinyin(s: unknown): s is string {
   return typeof s === "string" && /^[a-z0-9]{1,48}$/.test(s);
 }
 
+function isOptionalInChapterStatus(x: unknown): boolean {
+  if (x === undefined || x === null) return true;
+  return x === "normal" || x === "injured" || x === "deceased_this_chapter";
+}
+
 export function isChapterCastCharacter(x: unknown): x is ChapterCastCharacter {
   if (!x || typeof x !== "object") return false;
   const o = x as Record<string, unknown>;
   if (!isNonEmptyString(o.name, 64)) return false;
   if (!isValidNamePinyin(o.namePinyin)) return false;
   if (!isNonEmptyString(o.stableId, 512)) return false;
+  if (!isOptionalString(o.gender, 64)) return false;
   if (!isOptionalString(o.age, 64)) return false;
   if (!isOptionalString(o.appearance, 2000)) return false;
   if (!isOptionalString(o.personality, 2000)) return false;
   if (!isOptionalString(o.location, 500)) return false;
   if (!isOptionalString(o.presence, 1000)) return false;
   if (!isOptionalString(o.notes, 2000)) return false;
+  if (!isOptionalInChapterStatus(o.inChapterStatus)) return false;
   return true;
 }
 

@@ -230,39 +230,39 @@ export function ChapterCastFullPage({ novelId }: Props) {
     }
   }, [authorId, novelId, selectedChapterId, chapterNodes]);
 
-  const activeChapterTitle = useMemo(() => {
-    if (!selectedChapterId) return null;
-    const n = chapterNodes.find((c) => c.id === selectedChapterId);
-    return n?.title ?? null;
-  }, [chapterNodes, selectedChapterId]);
-
-  const activeChapterIndex = useMemo(() => {
-    const i = chapterNodes.findIndex((c) => c.id === selectedChapterId);
-    return i >= 0 ? i + 1 : null;
-  }, [chapterNodes, selectedChapterId]);
-
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-neutral-100 dark:bg-neutral-950">
-      <header className="shrink-0 border-b border-neutral-200 bg-white px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900">
-        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3">
+      <header className="shrink-0 border-b border-neutral-200 bg-white px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900 sm:px-4">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-violet-600 dark:text-violet-400">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-violet-600 dark:text-violet-400">
               人物信息 · 大开本
             </p>
-            <h1 className="mt-0.5 truncate text-base font-semibold text-neutral-900 dark:text-neutral-50">
-              {novelTitle ?? novelId}
-            </h1>
-            {activeChapterIndex != null && activeChapterTitle ? (
-              <p className="mt-1 truncate text-xs text-neutral-600 dark:text-neutral-400">
-                第 {activeChapterIndex} 章 · {activeChapterTitle}
-              </p>
-            ) : null}
+            <div className="mt-0.5 flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
+              <h1 className="truncate text-sm font-semibold leading-tight text-neutral-900 dark:text-neutral-50">
+                {novelTitle ?? novelId}
+              </h1>
+              {authorId && !structureLoading && chapterNodes.length > 0 ? (
+                <select
+                  className="max-w-full rounded-md border border-neutral-300 bg-neutral-50 px-2 py-1 text-[11px] text-neutral-900 focus:border-violet-500 focus:outline-none dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 sm:max-w-[min(100%,22rem)] sm:shrink-0"
+                  value={selectedChapterId ?? ""}
+                  onChange={onSelectChapter}
+                  aria-label="当前章节"
+                >
+                  {chapterNodes.map((c, i) => (
+                    <option key={c.id} value={c.id}>
+                      第 {i + 1} 章 · {c.title || "未命名"}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
             <WalletConnect />
             <Link
               href={`/editor/${encodeURIComponent(novelId)}`}
-              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-800 transition-colors hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+              className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
             >
               返回主编台
             </Link>
@@ -270,7 +270,7 @@ export function ChapterCastFullPage({ novelId }: Props) {
         </div>
       </header>
 
-      <main className="mx-auto flex min-h-0 w-full max-w-[1400px] flex-1 flex-col gap-3 overflow-hidden px-4 py-4">
+      <main className="mx-auto flex min-h-0 w-full max-w-[1400px] flex-1 flex-col gap-2 overflow-hidden px-3 py-2 sm:px-4 sm:py-3">
         {!authorId ? (
           <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100">
             连接钱包后可查看、抽取与保存本章人物信息。
@@ -292,28 +292,9 @@ export function ChapterCastFullPage({ novelId }: Props) {
           </p>
         ) : null}
 
-        {authorId && !structureLoading && chapterNodes.length > 0 ? (
-          <div className="shrink-0 space-y-2">
-            <label className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
-              当前章节
-            </label>
-            <select
-              className="w-full max-w-xl rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 focus:border-violet-500 focus:outline-none dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
-              value={selectedChapterId ?? ""}
-              onChange={onSelectChapter}
-            >
-              {chapterNodes.map((c, i) => (
-                <option key={c.id} value={c.id}>
-                  第 {i + 1} 章 · {c.title || "未命名"}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
-
         {authorId && !structureLoading && chapterNodes.length > 0 && selectedChapterId ? (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-            <div className="flex min-h-0 flex-1 flex-col px-2 py-3 sm:px-4">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="flex min-h-0 flex-1 flex-col px-2 py-2 sm:px-3 sm:py-2.5">
               <ChapterCastPanel
                 authorId={authorId}
                 novelId={novelId}

@@ -22,6 +22,66 @@ function memberJsonBasename(walletLower: string): string | null {
   return /^0x[a-f0-9]{40}$/.test(w) ? w : null;
 }
 
+function parseEnvFileAdminAddresses(raw: string): string[] {
+  const out: string[] = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const idx = t.indexOf("=");
+    if (idx <= 0) continue;
+    const k = t.slice(0, idx).trim();
+    if (k !== "ADMIN_ADDRESS") continue;
+    let v = t.slice(idx + 1).trim();
+    if (
+      (v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith("'") && v.endsWith("'"))
+    ) {
+      v = v.slice(1, -1);
+    }
+    for (const part of v.split(/[,;\s]+/)) {
+      const p = part.trim().toLowerCase();
+      if (/^0x[a-f0-9]{40}$/.test(p)) out.push(p);
+    }
+  }
+  return out;
+}
+
+let adminAddressCache: { addrs: Set<string>; at: number } | null = null;
+const ADMIN_CACHE_MS = 60_000;
+
+async function loadAdminAddresses(): Promise<Set<string>> {
+  const now = Date.now();
+  if (adminAddressCache && now - adminAddressCache.at < ADMIN_CACHE_MS) {
+    return adminAddressCache.addrs;
+  }
+  const addrs = new Set<string>();
+  const fromEnv = process.env.ADMIN_ADDRESS?.trim() ?? "";
+  for (const part of fromEnv.split(/[,;\s]+/)) {
+    const p = part.trim().toLowerCase();
+    if (/^0x[a-f0-9]{40}$/.test(p)) addrs.add(p);
+  }
+  const tryFiles = [
+    path.join(process.cwd(), ".env.production"),
+    path.join(process.cwd(), "..", "..", ".env.production"),
+  ];
+  for (const fp of tryFiles) {
+    try {
+      const raw = await fs.readFile(fp, "utf8");
+      for (const a of parseEnvFileAdminAddresses(raw)) addrs.add(a);
+    } catch {
+      /* ignore */
+    }
+  }
+  adminAddressCache = { addrs, at: now };
+  return addrs;
+}
+
+export async function isAdminWallet(walletLower: string): Promise<boolean> {
+  const w = walletLower.trim().toLowerCase();
+  if (!/^0x[a-f0-9]{40}$/.test(w)) return false;
+  return (await loadAdminAddresses()).has(w);
+}
+
 export async function readPaidMemberRecord(
   walletLower: string,
 ): Promise<PaidMemberRecord | null> {
@@ -30,7 +90,14 @@ export async function readPaidMemberRecord(
   const fp = path.join(MEMBERS_DIR, `${base}.json`);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const rec = JSON.parse(raw) as PaidMemberRecord;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    let rec: PaidMemberRecord;
+    try {
+      rec = JSON.parse(trimmed) as PaidMemberRecord;
+    } catch {
+      return null;
+    }
     if (!rec || typeof rec !== "object") return null;
     if (rec.status !== "active" && rec.status !== "canceled" && rec.status !== "past_due") {
       return null;
@@ -59,11 +126,12 @@ export async function isPaidMemberActive(walletLower: string): Promise<boolean> 
   return end.getTime() > Date.now();
 }
 
-/** 未通过时返回 403 JSON，通过时返回 null */
+/** 未通过时返回 403 JSON，通过时返回 null（管理员地址豁免） */
 export async function paidMemberForbiddenResponse(
   walletLower: string,
 ): Promise<NextResponse | null> {
   if (membershipCheckDisabled()) return null;
+  if (await isAdminWallet(walletLower)) return null;
   if (await isPaidMemberActive(walletLower)) return null;
   return NextResponse.json(
     {

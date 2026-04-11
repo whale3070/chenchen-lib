@@ -26,7 +26,10 @@ import { useSearchParams } from "next/navigation";
 import { OutlineSidebar } from "@/components/outline-sidebar";
 import { PublishNovelModal } from "@/components/publish-novel-modal";
 import { PersonaDetailCard } from "@/components/persona-detail";
-import { PersonaSidebar } from "@/components/persona-sidebar";
+import {
+  PersonaSidebar,
+  type PersonaSidebarMode,
+} from "@/components/persona-sidebar";
 import { SimulationPanel } from "@/components/simulation-panel";
 import { WalletConnect } from "@/components/wallet-connect";
 import { SelectionLock } from "@/extensions/selection-lock";
@@ -1052,6 +1055,10 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const [paymentQrLoading, setPaymentQrLoading] = useState(false);
   const [paymentQrSaving, setPaymentQrSaving] = useState(false);
   const [chapterPublishSubmitting, setChapterPublishSubmitting] = useState(false);
+  const [chapterCastLoading, setChapterCastLoading] = useState(false);
+  const [chapterCastRefreshKey, setChapterCastRefreshKey] = useState(0);
+  const [personaSidebarMode, setPersonaSidebarMode] =
+    useState<PersonaSidebarMode>("works");
   const [firstLineIndentEnabled, setFirstLineIndentEnabled] = useState(false);
   const markdownEditorPopupRef = useRef<Window | null>(null);
   const markdownEditorSessionTokenRef = useRef<string | null>(null);
@@ -2086,6 +2093,77 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     [authorId, persistPersonas],
   );
 
+  const handleExtractChapterCast = useCallback(async () => {
+    if (!authorId || !novelId || !activeChapterId) {
+      window.alert("请先连接钱包并在大纲中选中一章。");
+      return;
+    }
+    const chapterNodes = outlineNodes.filter((n) => n.kind === "chapter");
+    const idx = chapterNodes.findIndex((n) => n.id === activeChapterId);
+    if (idx < 0) {
+      window.alert("未找到当前章节。");
+      return;
+    }
+    const chapterIndex = idx + 1;
+    const node = chapterNodes[idx]!;
+    const bodySource = chapterBodySourceFromNode(node);
+    let chapterHtml = "";
+    const ed = editorInstanceRef.current;
+    const edOk = Boolean(ed && !ed.isDestroyed);
+    if (bodySource === "markdown") {
+      chapterHtml = chapterCanonicalBodyHtml(node);
+    } else if (edOk) {
+      chapterHtml = ed!.getHTML();
+    } else {
+      chapterHtml = chapterHtmlFromNode(node) ?? "";
+    }
+    if (!chapterHtml.trim()) {
+      window.alert("当前章节无正文。");
+      return;
+    }
+    setChapterCastLoading(true);
+    try {
+      const r = await fetch("/api/v1/chapter-cast/extract", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-wallet-address": authorId,
+        },
+        body: JSON.stringify({
+          authorId,
+          novelId,
+          chapterId: activeChapterId,
+          chapterIndex,
+          chapterHtml,
+        }),
+      });
+      const data = (await r.json()) as {
+        ok?: boolean;
+        version?: string;
+        files?: string[];
+        count?: number;
+        error?: string;
+        code?: string;
+      };
+      if (!r.ok) {
+        if (r.status === 403 && data.code === "subscription_required") {
+          window.alert(data.error ?? "需要付费会员订阅后方可使用此 AI 功能。");
+          return;
+        }
+        throw new Error(data.error ?? `HTTP ${r.status}`);
+      }
+      window.alert(
+        `已写入 ${data.count ?? 0} 个 JSON（${data.version ?? ""}）`,
+      );
+      setChapterCastRefreshKey((k) => k + 1);
+      setPersonaSidebarMode("chapterCast");
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "抽取失败");
+    } finally {
+      setChapterCastLoading(false);
+    }
+  }, [authorId, novelId, activeChapterId, outlineNodes]);
+
   const handlePersonasUpdateFromAi = useCallback(
     (next: Persona[]) => {
       setPersonas(next);
@@ -2360,7 +2438,14 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   );
 
   const selected = personas.find((p) => p.id === selectedId) ?? null;
-  const showPersonaInspector = manageTab === "personas";
+  const showPersonaInspector =
+    manageTab === "personas" && personaSidebarMode === "works";
+
+  useEffect(() => {
+    if (manageTab !== "personas") {
+      setPersonaSidebarMode("works");
+    }
+  }, [manageTab]);
   const chapterNodes = useMemo(
     () => outlineNodes.filter((n) => n.kind === "chapter"),
     [outlineNodes],
@@ -3339,6 +3424,17 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           walletConnected={Boolean(authorId)}
           onAdd={handleAddPersona}
           onDelete={handleDeletePersona}
+          novelId={novelId}
+          authorId={authorId}
+          activeChapterId={activeChapterId}
+          sidebarMode={personaSidebarMode}
+          onSidebarModeChange={setPersonaSidebarMode}
+          chapterCastRefreshKey={chapterCastRefreshKey}
+          onChapterCastExtract={handleExtractChapterCast}
+          chapterCastExtracting={chapterCastLoading}
+          chapterCastExtractDisabled={
+            !authorId || !activeChapterId || chapterCastLoading
+          }
         />
       ) : (
         <OutlineSidebar

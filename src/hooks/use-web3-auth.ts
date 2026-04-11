@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { useConnect, useConnection, useConnectors, useReconnect } from "wagmi";
+import { useAccount, useConnect, useConnectors, useReconnect } from "wagmi";
 
 import {
   getBrowserEthereumProvider,
@@ -31,7 +31,7 @@ export function useWeb3Auth() {
     isConnecting,
     isReconnecting,
     isDisconnected,
-  } = useConnection();
+  } = useAccount();
 
   const connectors = useConnectors();
   const { connectAsync, isPending: isConnectPending } = useConnect();

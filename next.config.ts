@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import { loadEnvConfig } from "@next/env";
@@ -6,6 +7,17 @@ import type { NextConfig } from "next";
 const webDir = __dirname;
 /** Monorepo root (`chenchen-lib/`), where `.env.production` holds ARK_*, DEEPSEEK_*, etc. */
 const repoRoot = path.join(__dirname, "..", "..");
+
+/** Turbopack 有时在 `apps/` 而非 `apps/web` 下解析裸导入 `tailwindcss`，显式指向本包 node_modules */
+function tailwindcssResolveDir(): string {
+  try {
+    const require = createRequire(path.join(webDir, "package.json"));
+    return path.dirname(require.resolve("tailwindcss/package.json"));
+  } catch {
+    return path.join(webDir, "node_modules", "tailwindcss");
+  }
+}
+const tailwindcssPkgDir = tailwindcssResolveDir();
 
 // apps/web/.env* first (local overrides), then repo root (canonical production secrets).
 loadEnvConfig(webDir);
@@ -23,7 +35,20 @@ loadEnvConfig(repoRoot);
  */
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["whale3070.com", "localhost", "127.0.0.1"],
-  outputFileTracingRoot: repoRoot,
+  /**
+   * 仅生产构建需要：把追踪根设到仓库根，便于 serverless 打包到 `shared/` 等目录的资源。
+   * 开发模式（Turbopack）下若始终设置此项，PostCSS 解析 `@import "tailwindcss"` 可能从
+   * `apps/` 等错误上下文找 `node_modules`，报 Can't resolve 'tailwindcss'。
+   */
+  ...(process.env.NODE_ENV === "production"
+    ? { outputFileTracingRoot: repoRoot }
+    : {}),
+  /** 修正 Turbopack 对 `@import "tailwindcss"` 的错误解析根（见上注释） */
+  turbopack: {
+    resolveAlias: {
+      tailwindcss: tailwindcssPkgDir,
+    },
+  },
 };
 
 export default nextConfig;

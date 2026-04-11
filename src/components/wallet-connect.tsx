@@ -20,7 +20,7 @@ export function WalletConnect() {
     walletGuideOpen,
     closeWalletGuide,
   } = useWeb3Auth();
-  const { mutate: disconnect, isPending: isDisconnecting } = useDisconnect();
+  const { disconnect, isPending: isDisconnecting } = useDisconnect();
 
   const handleConnect = () => {
     void requestConnect();

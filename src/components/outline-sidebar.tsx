@@ -25,6 +25,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { ChapterOutlineDialog } from "@/components/chapter-outline-dialog";
 import {
   appendOutlineChildFlat,
   flatToOutlineTree,
@@ -67,6 +68,9 @@ export type OutlineSidebarProps = {
   publishAllChaptersDisabled?: boolean;
   /** 删除章节（删除当前选中章节） */
   onDeleteChapter?: (chapterId: string) => Promise<boolean> | boolean;
+  /** 钱包地址：本章大纲一键提取等 */
+  authorId?: string | null;
+  novelId?: string;
 };
 
 const EDIT_COMMIT_MS = 650;
@@ -147,6 +151,7 @@ function SortableOutlineCard({
   onToggleChapterPublish,
   chapterPublishDisabled,
   chapterIndexById,
+  onOpenChapterOutlineDialog,
 }: {
   node: PlotOutlineNode;
   depth: number;
@@ -161,6 +166,7 @@ function SortableOutlineCard({
   onToggleChapterPublish?: (chapterId: string, publish: boolean) => Promise<void> | void;
   chapterPublishDisabled?: boolean;
   chapterIndexById: ReadonlyMap<string, number>;
+  onOpenChapterOutlineDialog?: (chapterId: string) => void;
 }) {
   const {
     attributes,
@@ -286,9 +292,24 @@ function SortableOutlineCard({
               placeholder="标题"
             />
             {isChapter ? (
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                第 {chapterIndex ?? "?"} 章 · 约 {chapterWordCount.toLocaleString("zh-CN")} 字
-              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  第 {chapterIndex ?? "?"} 章 · 约 {chapterWordCount.toLocaleString("zh-CN")} 字
+                </p>
+                {onOpenChapterOutlineDialog ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenChapterOutlineDialog(node.id);
+                    }}
+                    className="rounded border border-violet-300/60 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-800 hover:bg-violet-100 dark:border-violet-600/50 dark:bg-violet-950/50 dark:text-violet-200 dark:hover:bg-violet-900/60"
+                    title="编辑本章剧情大纲（可提取或上传）"
+                  >
+                    本章大纲
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             <textarea
               value={node.summary ?? ""}
@@ -343,6 +364,7 @@ function SortableOutlineCard({
           onToggleChapterPublish={onToggleChapterPublish}
           chapterPublishDisabled={chapterPublishDisabled}
           chapterIndexById={chapterIndexById}
+          onOpenChapterOutlineDialog={onOpenChapterOutlineDialog}
         />
       ) : null}
     </div>
@@ -363,6 +385,7 @@ function OutlineBranch({
   onToggleChapterPublish,
   chapterPublishDisabled,
   chapterIndexById,
+  onOpenChapterOutlineDialog,
 }: {
   nodes: PlotOutlineNode[];
   depth: number;
@@ -377,6 +400,7 @@ function OutlineBranch({
   onToggleChapterPublish?: (chapterId: string, publish: boolean) => Promise<void> | void;
   chapterPublishDisabled?: boolean;
   chapterIndexById: ReadonlyMap<string, number>;
+  onOpenChapterOutlineDialog?: (chapterId: string) => void;
 }) {
   const ids = useMemo(() => nodes.map((n) => n.id), [nodes]);
   return (
@@ -399,6 +423,7 @@ function OutlineBranch({
                 onToggleChapterPublish={onToggleChapterPublish}
                 chapterPublishDisabled={chapterPublishDisabled}
                 chapterIndexById={chapterIndexById}
+                onOpenChapterOutlineDialog={onOpenChapterOutlineDialog}
               />
             </li>
           ))}
@@ -425,7 +450,12 @@ export function OutlineSidebar({
   onPublishAllChapters,
   publishAllChaptersDisabled,
   onDeleteChapter,
+  authorId,
+  novelId,
 }: OutlineSidebarProps) {
+  const [chapterOutlineDialogId, setChapterOutlineDialogId] = useState<string | null>(
+    null,
+  );
   const [deleteSaveStatus, setDeleteSaveStatus] = useState<{
     kind: "success" | "error";
     text: string;
@@ -502,6 +532,38 @@ export function OutlineSidebar({
     },
     [nodes, onNodesChange, schedulePersist],
   );
+
+  const patchNodeMetadata = useCallback(
+    (id: string, metaPatch: Record<string, unknown>) => {
+      const next = nodes.map((n) => {
+        if (n.id !== id) return n;
+        return {
+          ...n,
+          metadata: { ...(n.metadata ?? {}), ...metaPatch },
+        };
+      });
+      onNodesChange(next);
+      schedulePersist(next);
+    },
+    [nodes, onNodesChange, schedulePersist],
+  );
+
+  const dialogChapterNode = useMemo(() => {
+    if (!chapterOutlineDialogId) return null;
+    return nodes.find((n) => n.id === chapterOutlineDialogId) ?? null;
+  }, [nodes, chapterOutlineDialogId]);
+
+  useEffect(() => {
+    if (
+      chapterOutlineDialogId &&
+      !nodes.some((n) => n.id === chapterOutlineDialogId)
+    ) {
+      setChapterOutlineDialogId(null);
+    }
+  }, [nodes, chapterOutlineDialogId]);
+
+  const openChapterOutlineDialogChapter =
+    dialogChapterNode?.kind === "chapter" ? dialogChapterNode : null;
 
   const addTag = useCallback(
     (id: string, tag: string) => {
@@ -910,6 +972,7 @@ export function OutlineSidebar({
                       onToggleChapterPublish={onToggleChapterPublish}
                       chapterPublishDisabled={chapterPublishDisabled}
                       chapterIndexById={chapterIndexById}
+                      onOpenChapterOutlineDialog={setChapterOutlineDialogId}
                     />
                   </li>
                 ))}
@@ -918,6 +981,18 @@ export function OutlineSidebar({
           </DndContext>
         )}
       </div>
+      <ChapterOutlineDialog
+        open={
+          chapterOutlineDialogId !== null && openChapterOutlineDialogChapter !== null
+        }
+        onOpenChange={(next) => {
+          if (!next) setChapterOutlineDialogId(null);
+        }}
+        chapter={openChapterOutlineDialogChapter}
+        authorId={authorId}
+        novelId={novelId}
+        onSaveMetadata={patchNodeMetadata}
+      />
     </aside>
   );
 }

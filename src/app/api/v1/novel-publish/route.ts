@@ -37,6 +37,26 @@ function safeAuthorId(id: string) {
   return id.toLowerCase();
 }
 
+/** 仅允许指向本站 audio-host、且 path 第一段为当前作者地址的链接 */
+function isAllowedNarrationAudioUrl(urlStr: string, authorLower: string): boolean {
+  const trimmed = urlStr.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return false;
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  if (!/\/api\/v1\/audio-host$/i.test(u.pathname.replace(/\/+$/, ""))) return false;
+  const pathParam = u.searchParams.get("path")?.trim() ?? "";
+  const parts = pathParam.split("/").map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 3) return false;
+  if (parts[0].toLowerCase() !== authorLower) return false;
+  const safeSeg = /^[a-zA-Z0-9_.-]+$/;
+  if (!parts.every((p) => safeSeg.test(p))) return false;
+  return true;
+}
+
 function structureFilePath(authorLower: string, novelId: string) {
   return path.join(
     process.cwd(),
@@ -315,6 +335,47 @@ export async function POST(req: NextRequest) {
   }
 
   const action = o.action === "withdraw" ? "withdraw" : "publish";
+
+  if (o.action === "set_chapter_narration_audio") {
+    const chapterId = typeof o.chapterId === "string" ? o.chapterId.trim() : "";
+    if (!chapterId) return badRequest("Missing chapterId");
+    const existing = await readPublishRecordFs(wh.walletLower, novelId);
+    if (!existing) {
+      return badRequest("请先完成整本发布配置，再关联章节朗读");
+    }
+    const rawUrl = o.audioUrl;
+    const map: Record<string, string> = {
+      ...(existing.chapterNarrationAudio && typeof existing.chapterNarrationAudio === "object"
+        ? existing.chapterNarrationAudio
+        : {}),
+    };
+    if (rawUrl === null || rawUrl === "") {
+      delete map[chapterId];
+    } else if (typeof rawUrl === "string") {
+      const u = rawUrl.trim();
+      if (!isAllowedNarrationAudioUrl(u, wh.walletLower)) {
+        return badRequest("无效的音频地址（仅支持本站上由你账号上传的音频链接）");
+      }
+      map[chapterId] = u;
+    } else {
+      return badRequest("Invalid audioUrl");
+    }
+    const next: NovelPublishRecord = {
+      ...existing,
+      chapterNarrationAudio: Object.keys(map).length > 0 ? map : undefined,
+    };
+    await writePublishRecordFs(next);
+    try {
+      await trackWalletEvent({
+        wallet: wh.walletLower,
+        eventType: "publish_change",
+        meta: { novelId },
+      });
+    } catch {
+      // ignore
+    }
+    return NextResponse.json({ record: next, ok: true });
+  }
 
   if (o.action === "set_reader_style") {
     const existing = await readPublishRecordFs(wh.walletLower, novelId);
@@ -613,6 +674,7 @@ export async function POST(req: NextRequest) {
     firstLineIndent,
     publishedAt: new Date().toISOString(),
     withdrawnAt: null,
+    chapterNarrationAudio: existing?.chapterNarrationAudio,
   };
 
   const needsAsyncReflow =

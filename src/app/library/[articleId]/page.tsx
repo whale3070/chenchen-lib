@@ -28,6 +28,8 @@ type ReaderArticle = {
     contentHtml: string;
     /** 与作者端 chapterMarkdown 同步；存在时读者用 remark-gfm 渲染（含表格） */
     contentMarkdown?: string;
+    /** 作者上传的章节朗读 MP3（本站 audio-host） */
+    narrationAudioUrl?: string;
   }>;
   paymentQrImageDataUrl?: string | null;
   language?: string;
@@ -225,6 +227,8 @@ export default function ReaderArticlePage({
           download: "下载本图片",
           generating: "生成二维码中…",
           chapterWordsApprox: (n: number) => `本章约 ${n.toLocaleString("zh-CN")} 字`,
+          authorNarrationTitle: "作者上传的朗读音频",
+          authorNarrationHint: "以下为作者为本章提供的 MP3。仍可使用下方在线合成或浏览器朗读。",
         }
       : {
           back: "← Back to Library",
@@ -271,6 +275,9 @@ export default function ReaderArticlePage({
           download: "Download Image",
           generating: "Generating QR...",
           chapterWordsApprox: (n: number) => `Approx. ${n.toLocaleString("en-US")} words/chars`,
+          authorNarrationTitle: "Author narration (MP3)",
+          authorNarrationHint:
+            "The author attached this MP3 for this chapter. You can still use server synthesis or browser read-aloud below.",
         };
   const langZoneLabel = localizedLanguageLabel(
     article?.language,
@@ -1154,6 +1161,21 @@ export default function ReaderArticlePage({
                 )}
               </div>
               <div className={readerTab === "speak" ? "space-y-3" : "hidden"}>
+                {currentChapter?.narrationAudioUrl ? (
+                  <div className="rounded-lg border border-emerald-500/40 bg-emerald-950/25 p-3">
+                    <p className="mb-2 text-xs font-medium text-emerald-200">
+                      {t.authorNarrationTitle}
+                    </p>
+                    <audio
+                      controls
+                      src={currentChapter.narrationAudioUrl}
+                      className="w-full"
+                      preload="metadata"
+                      playsInline
+                    />
+                    <p className="mt-2 text-[11px] text-zinc-500">{t.authorNarrationHint}</p>
+                  </div>
+                ) : null}
                   <div className="rounded-lg border border-[#1f3048] bg-[#0b1422] p-3">
                     <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[#21324a] pb-3">
                       <button

@@ -3490,6 +3490,8 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
             if (chapter) jumpToChapter(chapter);
           }}
           activeChapterId={activeChapterId}
+          authorId={authorId ?? undefined}
+          novelId={novelId}
           onDeleteChapter={handleDeleteChapter}
           publishStatusLabel={authorId ? publishStatusLabelText : null}
           onWithdrawPublish={

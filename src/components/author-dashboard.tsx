@@ -31,6 +31,7 @@ type Tab =
   | "novels"
   | "audiobooks"
   | "publish"
+  | "video"
   | "translation"
   | "analytics"
   | "tickets"
@@ -99,6 +100,14 @@ type AudiobookItem = {
   url: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type VideoExtractListItem = {
+  id: string;
+  sourceName: string;
+  mp3Url: string;
+  size: number;
+  createdAt: string;
 };
 
 type UnifiedWorkItem =
@@ -184,6 +193,8 @@ const AUDIO_ACCEPT =
   ".mp3,.wav,.m4a,.aac,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/flac,audio/x-flac";
 
 const NOVEL_TXT_ACCEPT = ".txt,text/plain";
+
+const VIDEO_MP4_ACCEPT = "video/mp4,.mp4";
 
 function formatModified(iso: string, uiLocale: string) {
   try {
@@ -333,6 +344,19 @@ export function AuthorDashboard() {
   const [audiobooksLoading, setAudiobooksLoading] = useState(false);
   const [audiobooksError, setAudiobooksError] = useState<string | null>(null);
   const [audiobookNovelId, setAudiobookNovelId] = useState("");
+  const [videoExtractItems, setVideoExtractItems] = useState<VideoExtractListItem[]>([]);
+  const [videoExtractLoading, setVideoExtractLoading] = useState(false);
+  const [videoExtractError, setVideoExtractError] = useState<string | null>(null);
+  const [videoExtractUploading, setVideoExtractUploading] = useState(false);
+  const [videoExtractUploadError, setVideoExtractUploadError] = useState<string | null>(null);
+  const [videoAssocNovelId, setVideoAssocNovelId] = useState("");
+  const [videoAssocChapterId, setVideoAssocChapterId] = useState("");
+  const [videoAssocChapters, setVideoAssocChapters] = useState<
+    Array<{ id: string; title: string }>
+  >([]);
+  const [videoAssocChaptersLoading, setVideoAssocChaptersLoading] = useState(false);
+  const [videoAssocLinkingId, setVideoAssocLinkingId] = useState<string | null>(null);
+  const [videoAssocMessage, setVideoAssocMessage] = useState<string | null>(null);
   const [renameInputById, setRenameInputById] = useState<Record<string, string>>({});
   const [txtBatchImport, setTxtBatchImport] = useState<{
     active: boolean;
@@ -344,6 +368,7 @@ export function AuthorDashboard() {
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const audioUploadXhrRef = useRef<XMLHttpRequest | null>(null);
   const novelTxtInputRef = useRef<HTMLInputElement | null>(null);
+  const videoMp4InputRef = useRef<HTMLInputElement | null>(null);
 
   /**
    * 不在此自动 requestConnect。刷新后由 wagmi（localStorage + reconnectOnMount）静默恢复会话，
@@ -552,6 +577,62 @@ export function AuthorDashboard() {
     }
   }, [address]);
 
+  const loadVideoExtracts = useCallback(async () => {
+    if (!address) return;
+    setVideoExtractLoading(true);
+    setVideoExtractError(null);
+    try {
+      const res = await fetch("/api/v1/video/extract", {
+        headers: { "x-wallet-address": address },
+        cache: "no-store",
+      });
+      const data = await readApiJsonSafe<{
+        items?: VideoExtractListItem[];
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error ?? "加载失败");
+      setVideoExtractItems(data.items ?? []);
+    } catch (e) {
+      setVideoExtractItems([]);
+      setVideoExtractError(e instanceof Error ? e.message : "加载失败");
+    } finally {
+      setVideoExtractLoading(false);
+    }
+  }, [address]);
+
+  const loadVideoAssocChapters = useCallback(
+    async (novelId: string) => {
+      if (!address || !novelId) return;
+      setVideoAssocChaptersLoading(true);
+      try {
+        const res = await fetch(
+          `/api/v1/novel-translation/sources?authorId=${encodeURIComponent(address)}&novelId=${encodeURIComponent(novelId)}`,
+          { headers: { "x-wallet-address": address } },
+        );
+        const data = await readApiJsonSafe<{
+          chapters?: Array<{ id: string; title: string }>;
+          error?: string;
+        }>(res);
+        if (!res.ok) throw new Error(data.error ?? "加载章节失败");
+        const ch = (data.chapters ?? []).map((c) => ({
+          id: c.id,
+          title: c.title,
+        }));
+        setVideoAssocChapters(ch);
+        setVideoAssocChapterId((prev) => {
+          if (prev && ch.some((x) => x.id === prev)) return prev;
+          return ch[0]?.id ?? "";
+        });
+      } catch {
+        setVideoAssocChapters([]);
+        setVideoAssocChapterId("");
+      } finally {
+        setVideoAssocChaptersLoading(false);
+      }
+    },
+    [address],
+  );
+
   useEffect(() => {
     if (tab === "novels" && address) void loadNovels();
   }, [tab, address, loadNovels]);
@@ -561,10 +642,32 @@ export function AuthorDashboard() {
   }, [tab, address, loadAudiobooks]);
 
   useEffect(() => {
-    if ((tab === "publish" || tab === "translation") && address) {
+    if ((tab === "publish" || tab === "translation" || tab === "video") && address) {
       void loadPublishOverview();
     }
   }, [tab, address, loadPublishOverview]);
+
+  useEffect(() => {
+    if (tab !== "video" || !address) return;
+    void loadVideoExtracts();
+  }, [tab, address, loadVideoExtracts]);
+
+  useEffect(() => {
+    if (tab !== "video") return;
+    if (videoAssocNovelId) {
+      void loadVideoAssocChapters(videoAssocNovelId);
+    } else {
+      setVideoAssocChapters([]);
+      setVideoAssocChapterId("");
+    }
+  }, [tab, videoAssocNovelId, loadVideoAssocChapters]);
+
+  useEffect(() => {
+    if (tab !== "video") return;
+    if (videoAssocNovelId) return;
+    const first = publishRows[0]?.novelId;
+    if (first) setVideoAssocNovelId(first);
+  }, [tab, videoAssocNovelId, publishRows]);
 
   useEffect(() => {
     if (tab !== "analytics") return;
@@ -873,6 +976,70 @@ export function AuthorDashboard() {
       }
     },
     [address, loadNovels, runSingleTxtImport],
+  );
+
+  const handleVideoMp4Selected = useCallback(
+    async (files: FileList | null) => {
+      const f = files?.[0];
+      if (!f || !address) return;
+      setVideoExtractUploading(true);
+      setVideoExtractUploadError(null);
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        const res = await fetch("/api/v1/video/extract", {
+          method: "POST",
+          headers: { "x-wallet-address": address },
+          body: fd,
+        });
+        const data = await readApiJsonSafe<{
+          item?: VideoExtractListItem;
+          error?: string;
+        }>(res);
+        if (!res.ok) throw new Error(data.error ?? "上传失败");
+        if (data.item) setVideoExtractItems((prev) => [data.item!, ...prev]);
+      } catch (e) {
+        setVideoExtractUploadError(e instanceof Error ? e.message : "上传失败");
+      } finally {
+        setVideoExtractUploading(false);
+      }
+    },
+    [address],
+  );
+
+  const linkExtractToChapter = useCallback(
+    async (mp3Url: string, extractId: string) => {
+      if (!address || !videoAssocNovelId || !videoAssocChapterId) {
+        window.alert("请先选择小说与章节");
+        return;
+      }
+      setVideoAssocLinkingId(extractId);
+      setVideoAssocMessage(null);
+      try {
+        const res = await fetch("/api/v1/novel-publish", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-wallet-address": address,
+          },
+          body: JSON.stringify({
+            action: "set_chapter_narration_audio",
+            authorId: address,
+            novelId: videoAssocNovelId,
+            chapterId: videoAssocChapterId,
+            audioUrl: mp3Url,
+          }),
+        });
+        const data = await readApiJsonSafe<{ error?: string }>(res);
+        if (!res.ok) throw new Error(data.error ?? "关联失败");
+        setVideoAssocMessage("已关联到当前所选章节；读者在书库该书的「朗读」页可播放此 MP3。");
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "关联失败");
+      } finally {
+        setVideoAssocLinkingId(null);
+      }
+    },
+    [address, videoAssocNovelId, videoAssocChapterId],
   );
 
   const openShareModal = (row: {
@@ -1585,6 +1752,17 @@ export function AuthorDashboard() {
           </button>
           <button
             type="button"
+            onClick={() => setTab("video")}
+            className={
+              tab === "video"
+                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
+                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
+            }
+          >
+            {t("workspace.tabVideo")}
+          </button>
+          <button
+            type="button"
             onClick={() => setTab("settings")}
             className={
               tab === "settings"
@@ -1948,6 +2126,149 @@ export function AuthorDashboard() {
                   })}
                 </ul>
               )}
+            </div>
+          </div>
+        )}
+
+        {tab === "video" && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">视频管理</h2>
+            <p className="max-w-xl text-sm text-neutral-600 dark:text-neutral-400">
+              上传 MP4，由服务器提取 MP3。在下方选择小说与章节后，点击某条提取记录右侧的「关联到章节」，读者即可在该章「朗读」页播放此音频。
+            </p>
+            <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950">
+              <input
+                ref={videoMp4InputRef}
+                type="file"
+                accept={VIDEO_MP4_ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                  void handleVideoMp4Selected(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={videoExtractUploading}
+                  onClick={() => videoMp4InputRef.current?.click()}
+                  className="rounded-lg border border-violet-500/60 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-800 hover:bg-violet-500/20 disabled:opacity-50 dark:text-violet-200 dark:hover:bg-violet-500/15"
+                >
+                  {videoExtractUploading ? "上传并提取中…" : "选择 MP4 上传"}
+                </button>
+                <span className="text-xs text-neutral-500">
+                  单文件约 ≤220MB；提取结果保存在你的账号下。
+                </span>
+              </div>
+              {videoExtractUploadError ? (
+                <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">
+                  {videoExtractUploadError}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
+                <h3 className="text-sm font-semibold text-zinc-100">关联目标</h3>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  需已存在发布配置的小说；章节列表与翻译模块同源。
+                </p>
+                <label className="mt-3 block text-xs font-medium text-zinc-300">
+                  小说
+                </label>
+                <select
+                  value={videoAssocNovelId}
+                  onChange={(e) => {
+                    setVideoAssocNovelId(e.target.value);
+                    setVideoAssocMessage(null);
+                  }}
+                  disabled={loadingPublish || publishRows.length === 0}
+                  className="mt-1 w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                >
+                  <option value="">
+                    {loadingPublish ? "加载中…" : "请选择小说"}
+                  </option>
+                  {publishRows.map((row) => (
+                    <option key={row.novelId} value={row.novelId}>
+                      {row.novelTitle}
+                    </option>
+                  ))}
+                </select>
+                <label className="mt-3 block text-xs font-medium text-zinc-300">
+                  章节
+                </label>
+                <select
+                  value={videoAssocChapterId}
+                  onChange={(e) => {
+                    setVideoAssocChapterId(e.target.value);
+                    setVideoAssocMessage(null);
+                  }}
+                  disabled={!videoAssocNovelId || videoAssocChaptersLoading}
+                  className="mt-1 w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                >
+                  <option value="">
+                    {videoAssocChaptersLoading ? "加载章节…" : "请选择章节"}
+                  </option>
+                  {videoAssocChapters.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title}
+                    </option>
+                  ))}
+                </select>
+                {videoAssocMessage ? (
+                  <p className="mt-3 text-xs text-emerald-400">{videoAssocMessage}</p>
+                ) : null}
+              </div>
+              <div className="rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
+                <h3 className="text-sm font-semibold text-zinc-100">已提取的 MP3</h3>
+                {videoExtractLoading ? (
+                  <p className="mt-2 text-sm text-zinc-500">加载中…</p>
+                ) : videoExtractError ? (
+                  <p className="mt-2 text-sm text-rose-400">{videoExtractError}</p>
+                ) : videoExtractItems.length === 0 ? (
+                  <p className="mt-2 text-sm text-zinc-500">暂无记录，请先上传 MP4。</p>
+                ) : (
+                  <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">
+                    {videoExtractItems.map((item) => (
+                      <li
+                        key={item.id}
+                        className="rounded-lg border border-[#2a3f5c] bg-[#0d1625] p-2.5"
+                      >
+                        <p className="truncate text-xs font-medium text-zinc-200" title={item.sourceName}>
+                          {item.sourceName}
+                        </p>
+                        <p className="text-[11px] text-zinc-500">
+                          {(item.size / (1024 * 1024)).toFixed(2)} MB ·{" "}
+                          {formatModified(item.createdAt, locale)}
+                        </p>
+                        <audio controls src={item.mp3Url} className="mt-2 w-full" preload="metadata" />
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <a
+                            href={item.mp3Url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] text-cyan-400 underline"
+                          >
+                            打开链接
+                          </a>
+                          <button
+                            type="button"
+                            disabled={
+                              videoAssocLinkingId === item.id ||
+                              !videoAssocNovelId ||
+                              !videoAssocChapterId
+                            }
+                            onClick={() => void linkExtractToChapter(item.mp3Url, item.id)}
+                            className="rounded border border-emerald-500/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
+                          >
+                            {videoAssocLinkingId === item.id ? "关联中…" : "关联到章节"}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           </div>
         )}

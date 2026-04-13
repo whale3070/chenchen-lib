@@ -33,6 +33,8 @@ export type NovelPublishRecord = {
   layoutMode?: PublishLayoutMode;
   /** 阅读页段落样式：是否首行缩进 */
   firstLineIndent?: boolean;
+  /** 章节 ID → 作者托管朗读音频 URL（通常为 /api/v1/audio-host?path=…） */
+  chapterNarrationAudio?: Record<string, string>;
   /**
    * 公开 + AI 自动排版时：后台任务状态。未设置表示无进行中任务。
    */

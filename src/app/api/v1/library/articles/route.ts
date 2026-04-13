@@ -23,6 +23,7 @@ type PublishRecordLite = {
   publishedAt?: string;
   publishedChapterIds?: string[];
   firstLineIndent?: boolean;
+  chapterNarrationAudio?: Record<string, string>;
 };
 
 type TranslationStore = {
@@ -912,6 +913,18 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const narrationMap: Record<string, string> = (() => {
+    const raw = rec.data.chapterNarrationAudio;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const id = typeof k === "string" ? k.trim() : "";
+      const url = typeof v === "string" ? v.trim() : "";
+      if (id && url) out[id] = url;
+    }
+    return out;
+  })();
+
   return NextResponse.json({
     article: {
       articleId,
@@ -939,9 +952,14 @@ export async function GET(req: NextRequest) {
           title: string;
           contentHtml: string;
           contentMarkdown?: string;
+          narrationAudioUrl?: string;
         } = { id, title, contentHtml };
         if (typeof contentMarkdown === "string" && contentMarkdown.trim()) {
           row.contentMarkdown = contentMarkdown;
+        }
+        const narr = narrationMap[id];
+        if (typeof narr === "string" && narr) {
+          row.narrationAudioUrl = narr;
         }
         return row;
       }),

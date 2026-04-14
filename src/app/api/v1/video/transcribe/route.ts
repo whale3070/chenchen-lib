@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
     return notFound("未找到该提取记录");
   }
   if (!item.pathParam) {
-    return badRequest("该记录缺少音频存储路径，请重新上传 MP4 生成新记录后再试");
+    return badRequest("该记录缺少音频存储路径，请重新上传文件生成新记录后再试");
   }
 
   const resolved = resolveHostedMp3AbsPath(wh.walletLower, item.pathParam);

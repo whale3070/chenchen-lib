@@ -39,7 +39,8 @@ export function LandingGate() {
   );
 
   const displayLocale = isConnected ? locale : "en";
-  const progressTimeline = getLandingProgressTimeline(displayLocale);
+  /** 开发进度条与界面语言一致，未连接钱包时仍可读 localStorage 中的 zh-CN 等设置 */
+  const progressTimeline = getLandingProgressTimeline(locale);
 
   const aiStrings = useMemo(
     () => ({

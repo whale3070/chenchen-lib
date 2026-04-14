@@ -196,7 +196,9 @@ const AUDIO_ACCEPT =
 
 const NOVEL_TXT_ACCEPT = ".txt,text/plain";
 
-const VIDEO_MP4_ACCEPT = "video/mp4,.mp4";
+/** 视频管理：MP4 抽轨；Opus/Ogg 转 MP3；MP3 直传 */
+const VIDEO_UPLOAD_ACCEPT =
+  "video/mp4,.mp4,audio/mpeg,.mp3,audio/opus,.opus,audio/ogg,.ogg,application/ogg";
 
 function formatModified(iso: string, uiLocale: string) {
   try {
@@ -2225,14 +2227,14 @@ export function AuthorDashboard() {
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">视频管理</h2>
             <p className="max-w-xl text-sm text-neutral-600 dark:text-neutral-400">
-              上传 MP4，由服务器提取 MP3。每条记录可在「语音转文字」Tab 将 MP3 转为文稿（ElevenLabs）。在下方选择小说与章节后，于「MP3」Tab
-              点击「关联到章节」，读者即可在该章「朗读」页播放此音频。
+              上传 MP4（从视频提取音轨）、MP3（直接入库）、或 Opus / Ogg 音频（转码为 MP3）。每条记录可在「语音转文字」Tab 将 MP3
+              转为文稿（ElevenLabs）。在下方选择小说与章节后，于「MP3」Tab 点击「关联到章节」，读者即可在该章「朗读」页播放此音频。
             </p>
             <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950">
               <input
                 ref={videoMp4InputRef}
                 type="file"
-                accept={VIDEO_MP4_ACCEPT}
+                accept={VIDEO_UPLOAD_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
                   void handleVideoMp4Selected(e.target.files);
@@ -2246,7 +2248,7 @@ export function AuthorDashboard() {
                   onClick={() => videoMp4InputRef.current?.click()}
                   className="rounded-lg border border-violet-500/60 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-800 hover:bg-violet-500/20 disabled:opacity-50 dark:text-violet-200 dark:hover:bg-violet-500/15"
                 >
-                  {videoExtractUploading ? "上传并提取中…" : "选择 MP4 上传"}
+                  {videoExtractUploading ? "上传并提取中…" : "选择 MP4 / MP3 / Opus 上传"}
                 </button>
                 <span className="text-xs text-neutral-500">
                   单文件约 ≤220MB；提取结果保存在你的账号下。
@@ -2318,7 +2320,7 @@ export function AuthorDashboard() {
                 ) : videoExtractError ? (
                   <p className="mt-2 text-sm text-rose-400">{videoExtractError}</p>
                 ) : videoExtractItems.length === 0 ? (
-                  <p className="mt-2 text-sm text-zinc-500">暂无记录，请先上传 MP4。</p>
+                  <p className="mt-2 text-sm text-zinc-500">暂无记录，请先上传 MP4、MP3 或 Opus / Ogg。</p>
                 ) : (
                   <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">
                     {videoExtractItems.map((item) => {

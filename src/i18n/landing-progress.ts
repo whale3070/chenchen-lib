@@ -6,6 +6,15 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 4 月 14 日（第十六天）",
+    title: "开发进度",
+    items: [
+      "实现删除已提取 MP3：添加服务端 API（从索引移除并删除音频文件），并在「打开链接」「关联到章节」右侧加入删除按钮。",
+      "实现语音转文字的功能。",
+      "工作台入口（视频管理）：https://whale3070.com:3000/workspace",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 13 日（第十五天）",
     title: "开发进度",
     items: [
@@ -151,6 +160,15 @@ const ZH: ProgressStage[] = [
 ];
 
 const EN: ProgressStage[] = [
+  {
+    dateLabel: "April 14, 2026 (day 16)",
+    title: "Progress",
+    items: [
+      "Delete extracted MP3: added a server API (remove from index and delete the audio file) and a delete button next to “Open link” and “Attach to chapter”.",
+      "Speech-to-text is now supported.",
+      "Workspace (video tools): https://whale3070.com:3000/workspace",
+    ],
+  },
   {
     dateLabel: "April 13, 2026 (day 15)",
     title: "Progress",

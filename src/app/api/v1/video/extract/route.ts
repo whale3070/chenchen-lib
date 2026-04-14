@@ -122,10 +122,40 @@ function resolveAuthorMp3AbsPath(
   return dataPath;
 }
 
-function isMp4File(file: File) {
+function primaryMime(file: File): string {
+  return (file.type || "").toLowerCase().split(";")[0]?.trim() ?? "";
+}
+
+/** 上传：MP4（抽音轨）、Opus/Ogg（转 MP3）、已是 MP3 则直存（不转码） */
+function isSupportedMediaFile(file: File) {
   const ext = path.extname(file.name || "").toLowerCase();
-  const mime = (file.type || "").toLowerCase();
-  return ext === ".mp4" || mime === "video/mp4";
+  const mime = primaryMime(file);
+  if (ext === ".mp4" || mime === "video/mp4") return true;
+  if (ext === ".opus" || mime === "audio/opus") return true;
+  if (ext === ".ogg" || mime === "audio/ogg" || mime === "application/ogg") return true;
+  if (ext === ".mp3" || mime === "audio/mpeg" || mime === "audio/mp3" || mime === "audio/x-mpeg")
+    return true;
+  return false;
+}
+
+/** 已是 MP3：跳过 ffmpeg，写入托管目录 */
+function isRawMp3Upload(file: File): boolean {
+  const ext = path.extname(file.name || "").toLowerCase();
+  const mime = primaryMime(file);
+  if (ext === ".mp3") return true;
+  if (mime === "audio/mpeg" || mime === "audio/mp3" || mime === "audio/x-mpeg") return true;
+  return false;
+}
+
+function inferUploadExt(file: File): string {
+  const ext = path.extname(file.name || "").toLowerCase();
+  if (ext === ".mp4" || ext === ".opus" || ext === ".ogg" || ext === ".mp3") return ext;
+  const mime = primaryMime(file);
+  if (mime === "video/mp4") return ".mp4";
+  if (mime === "audio/opus") return ".opus";
+  if (mime === "audio/ogg" || mime === "application/ogg") return ".ogg";
+  if (mime === "audio/mpeg" || mime === "audio/mp3" || mime === "audio/x-mpeg") return ".mp3";
+  return ".mp4";
 }
 
 export async function GET(req: NextRequest) {
@@ -179,81 +209,98 @@ export async function POST(req: NextRequest) {
   }
   const file = form.get("file");
   if (!(file instanceof File)) {
-    return badRequest("请上传单个 MP4 文件（字段名 file）");
+    return badRequest(
+      "请上传单个文件（字段名 file）：MP4 视频、MP3 音频，或 Opus / Ogg 音频",
+    );
   }
-  if (!isMp4File(file)) {
-    return badRequest("仅支持 MP4 视频");
+  if (!isSupportedMediaFile(file)) {
+    return badRequest("仅支持 MP4、MP3，或 Opus（.opus）/ Ogg 音频（.ogg）");
   }
   const buf = new Uint8Array(await file.arrayBuffer());
   if (buf.byteLength <= 0) return badRequest("空文件");
   if (buf.byteLength > MAX_VIDEO_BYTES) {
-    return badRequest(`视频过大（>${MAX_VIDEO_BYTES / (1024 * 1024)}MB）`);
+    return badRequest(`文件过大（>${MAX_VIDEO_BYTES / (1024 * 1024)}MB）`);
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "cc-video-"));
-  const inName = path.basename(file.name || "upload.mp4").replace(/[^\w.-]+/g, "_") || "upload.mp4";
-  const inPath = path.join(tmpDir, inName.endsWith(".mp4") ? inName : `${inName}.mp4`);
-  const outPath = path.join(tmpDir, "out.mp3");
-  try {
-    await fs.writeFile(inPath, buf);
-    try {
-      await execFileAsync(
-        "ffmpeg",
-        [
-          "-nostdin",
-          "-y",
-          "-i",
-          inPath,
-          "-vn",
-          "-acodec",
-          "libmp3lame",
-          "-q:a",
-          "4",
-          outPath,
-        ],
-        { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 20 * 1024 * 1024 },
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "ffmpeg 失败";
-      return NextResponse.json({ error: `提取音频失败：${msg.slice(0, 400)}` }, { status: 500 });
-    }
+  const month = new Date().toISOString().slice(0, 7).replace("-", "");
+  const hostedName = `vex-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}.mp3`;
+  const absDir = path.join(process.cwd(), ".data", "audio-bed", wh.walletLower, month);
+  const absHosted = path.join(absDir, hostedName);
 
-    let mp3Stat;
-    try {
-      mp3Stat = await fs.stat(outPath);
-    } catch {
-      return NextResponse.json({ error: "未生成 MP3 文件" }, { status: 500 });
-    }
-    if (mp3Stat.size <= 0) {
-      return NextResponse.json({ error: "生成的 MP3 为空" }, { status: 500 });
-    }
+  const rawBase =
+    path.basename(file.name || "").replace(/[^\w.-]+/g, "_").replace(/\.+$/, "") || "upload";
+  const stem = rawBase.replace(/\.[^.]+$/, "") || "upload";
+  const ext = inferUploadExt(file);
+  const displaySourceName = file.name || `${stem}${ext}`;
 
-    const month = new Date().toISOString().slice(0, 7).replace("-", "");
-    const hostedName = `vex-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}.mp3`;
-    const absDir = path.join(process.cwd(), ".data", "audio-bed", wh.walletLower, month);
+  let mp3Size: number;
+
+  if (isRawMp3Upload(file)) {
     await fs.mkdir(absDir, { recursive: true });
-    const absHosted = path.join(absDir, hostedName);
-    await fs.copyFile(outPath, absHosted);
+    await fs.writeFile(absHosted, buf);
+    mp3Size = buf.byteLength;
+  } else {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "cc-video-"));
+    const inPath = path.join(tmpDir, `${stem}${ext}`);
+    const outPath = path.join(tmpDir, "out.mp3");
+    try {
+      await fs.writeFile(inPath, buf);
+      try {
+        await execFileAsync(
+          "ffmpeg",
+          [
+            "-nostdin",
+            "-y",
+            "-i",
+            inPath,
+            "-vn",
+            "-acodec",
+            "libmp3lame",
+            "-q:a",
+            "4",
+            outPath,
+          ],
+          { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 20 * 1024 * 1024 },
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "ffmpeg 失败";
+        return NextResponse.json({ error: `提取音频失败：${msg.slice(0, 400)}` }, { status: 500 });
+      }
 
-    const pathParam = `${wh.walletLower}/${month}/${hostedName}`;
-    const base = getPublicBaseUrl(req);
-    const mp3Url = `${base}/api/v1/audio-host?path=${encodeURIComponent(pathParam)}`;
+      let mp3Stat;
+      try {
+        mp3Stat = await fs.stat(outPath);
+      } catch {
+        return NextResponse.json({ error: "未生成 MP3 文件" }, { status: 500 });
+      }
+      if (mp3Stat.size <= 0) {
+        return NextResponse.json({ error: "生成的 MP3 为空" }, { status: 500 });
+      }
 
-    const now = new Date().toISOString();
-    const id = `vex-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
-    const item: VideoExtractItem = {
-      id,
-      sourceName: file.name || inName,
-      mp3Url,
-      pathParam,
-      size: mp3Stat.size,
-      createdAt: now,
-    };
-    const index = await readIndex(wh.walletLower);
-    index.items.unshift(item);
-    await writeIndex(index);
-    return NextResponse.json({ item });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.mkdir(absDir, { recursive: true });
+      await fs.copyFile(outPath, absHosted);
+      mp3Size = mp3Stat.size;
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
+
+  const pathParam = `${wh.walletLower}/${month}/${hostedName}`;
+  const base = getPublicBaseUrl(req);
+  const mp3Url = `${base}/api/v1/audio-host?path=${encodeURIComponent(pathParam)}`;
+
+  const now = new Date().toISOString();
+  const id = `vex-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
+  const item: VideoExtractItem = {
+    id,
+    sourceName: displaySourceName,
+    mp3Url,
+    pathParam,
+    size: mp3Size,
+    createdAt: now,
+  };
+  const index = await readIndex(wh.walletLower);
+  index.items.unshift(item);
+  await writeIndex(index);
+  return NextResponse.json({ item });
 }

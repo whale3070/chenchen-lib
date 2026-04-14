@@ -201,9 +201,13 @@ function SortableOutlineCard({
     isPublished && publishedChapterDirtyIds.has(node.id);
   const [toggling, setToggling] = useState(false);
 
+  // setNodeRef 只包住本节点卡片，不把子树（卷下的章节列表）算进碰撞盒，否则父级 droppable
+  // 盖住子章节，拖拽时 over 常落在「卷」上导致无法与兄弟章节重排。
   return (
-    <div ref={setNodeRef} style={style} className={isDragging ? "opacity-60" : ""}>
+    <div className={isDragging ? "opacity-60" : undefined}>
       <div
+        ref={setNodeRef}
+        style={style}
         data-outline-id={node.id}
         onClick={() => onSelect(node)}
         className={[

@@ -97,6 +97,31 @@ async function writeIndex(index: VideoExtractIndex) {
   await fs.writeFile(fp, JSON.stringify(index, null, 2), "utf8");
 }
 
+function sanitizeSegment(seg: string) {
+  return seg.replace(/[^\w.-]+/g, "_");
+}
+
+/** 解析作者名下 audio-bed 中的 MP3 绝对路径；非法则返回 null */
+function resolveAuthorMp3AbsPath(
+  authorLower: string,
+  pathParam: string,
+): string | null {
+  const parts = pathParam
+    .split("/")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(sanitizeSegment);
+  if (parts.length < 3) return null;
+  if (parts[0]?.toLowerCase() !== authorLower) return null;
+  const ext = path.extname(parts[parts.length - 1] ?? "").toLowerCase();
+  if (ext !== ".mp3") return null;
+  const dataPath = path.join(process.cwd(), ".data", "audio-bed", ...parts);
+  const root = path.join(process.cwd(), ".data", "audio-bed");
+  const rel = path.relative(root, dataPath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return dataPath;
+}
+
 function isMp4File(file: File) {
   const ext = path.extname(file.name || "").toLowerCase();
   const mime = (file.type || "").toLowerCase();
@@ -109,6 +134,37 @@ export async function GET(req: NextRequest) {
   const index = await readIndex(wh.walletLower);
   const items = [...index.items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return NextResponse.json({ items });
+}
+
+function notFound(message: string) {
+  return NextResponse.json({ error: message }, { status: 404 });
+}
+
+export async function DELETE(req: NextRequest) {
+  const wh = parseWalletHeader(req);
+  if (!wh.ok) return wh.res;
+
+  const extractId = req.nextUrl.searchParams.get("extractId")?.trim() ?? "";
+  if (!extractId) {
+    return badRequest("缺少 extractId 参数");
+  }
+
+  const index = await readIndex(wh.walletLower);
+  const idx = index.items.findIndex((x) => x.id === extractId);
+  if (idx < 0) {
+    return notFound("未找到该提取记录");
+  }
+  const [removed] = index.items.splice(idx, 1);
+  await writeIndex(index);
+
+  if (removed?.pathParam) {
+    const abs = resolveAuthorMp3AbsPath(wh.walletLower, removed.pathParam);
+    if (abs) {
+      await fs.unlink(abs).catch(() => undefined);
+    }
+  }
+
+  return NextResponse.json({ ok: true });
 }
 
 export async function POST(req: NextRequest) {

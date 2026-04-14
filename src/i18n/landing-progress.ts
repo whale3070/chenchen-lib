@@ -6,6 +6,18 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 4 月 13 日（第十五天）",
+    title: "开发进度",
+    items: [
+      "视频管理：作者工作台支持上传 MP4、服务端提取 MP3，并可将提取结果关联到某本书的指定章节；读者在书库该章「朗读」Tab 可播放作者提供的 MP3。",
+      "修复「作者上传朗读音频」在读者端无法拖动进度条、快进失效的问题：音频托管接口补充 Accept-Ranges 与 HTTP Range（206 分段响应）。",
+      "创业圆桌会议：搜集到多方反馈。Yuki：宣传上是否有对标可参考；目标客群是谁、是否应优先让创作者深度试用；把亮点讲成直白好懂、略「土」但有效的自然语言。",
+      "Yuki（续）：内地用户若首页第一眼全是英文容易直接离开，建议在首页做中英切换；若浏览器提示「不安全」也会劝退许多伙伴，需重视 HTTPS/证书与首访信任。",
+      "Yuki（续，晚间分享）：对极端主义式创作与敏感内容、平台能否删除与技术监管边界；技术表达偏专业、门外汉听不懂，招募运营/推广时需补强「产品话」与 Web3 新手可读性；读者模式除章末评论外，可探索段落划线评论、生僻字/历史典故（甚至短科普片）等，参考微信读书等成熟形态（注意合规）。",
+      "Yuki（续）：产品是否以手机 App 为主阵地、全球读者与是否花钱引入经典作品（如阿德勒心理学类）；自由讨论还涉及防盗——可否给纯新手作者做防盗科普、是否提供面向有一定收入创作者的付费防盗服务等。",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 10 日（第十二天）",
     title: "开发进度",
     items: [
@@ -139,6 +151,18 @@ const ZH: ProgressStage[] = [
 ];
 
 const EN: ProgressStage[] = [
+  {
+    dateLabel: "April 13, 2026 (day 15)",
+    title: "Progress",
+    items: [
+      "Workspace video tools: upload MP4, server extracts MP3, authors can attach audio to a book chapter; readers hear it on the chapter “Listen” tab.",
+      "Fixed author-hosted narration MP3 seeking/scrubbing in the reader: audio-host now supports Accept-Ranges and HTTP 206 byte-range responses.",
+      "Startup roundtable feedback (summary): positioning vs benchmarks; clarify target users and creator-first onboarding; communicate highlights in plain, punchy language.",
+      "Same session: mainland users may bounce if the landing page is English-only—consider a zh/en toggle on the home page; “Not secure” browser warnings also hurt trust—prioritize HTTPS and certificates.",
+      "More notes: moderation / sensitive content expectations; make technical messaging accessible when hiring growth/ops; explore richer reader interactions beyond end-of-chapter comments (e.g. inline highlights, term/allusion explainers, short clips) with compliance in mind.",
+      "Product shape questions: mobile app plans; licensing classic works for a global audience; piracy education for hobby authors and possible paid anti-theft services for higher-earning creators.",
+    ],
+  },
   {
     dateLabel: "April 10, 2026 (day 12)",
     title: "Progress",

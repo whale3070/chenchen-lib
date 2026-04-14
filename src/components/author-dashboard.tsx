@@ -106,6 +106,8 @@ type VideoExtractListItem = {
   id: string;
   sourceName: string;
   mp3Url: string;
+  /** 服务端索引字段，用于转写等内部能力 */
+  pathParam?: string;
   size: number;
   createdAt: string;
 };
@@ -356,7 +358,16 @@ export function AuthorDashboard() {
   >([]);
   const [videoAssocChaptersLoading, setVideoAssocChaptersLoading] = useState(false);
   const [videoAssocLinkingId, setVideoAssocLinkingId] = useState<string | null>(null);
+  const [videoExtractDeletingId, setVideoExtractDeletingId] = useState<string | null>(null);
   const [videoAssocMessage, setVideoAssocMessage] = useState<string | null>(null);
+  const [videoCardPanelById, setVideoCardPanelById] = useState<
+    Record<string, "audio" | "transcript">
+  >({});
+  const [videoTranscriptById, setVideoTranscriptById] = useState<Record<string, string>>({});
+  const [videoTranscribingId, setVideoTranscribingId] = useState<string | null>(null);
+  const [videoTranscribeErrorById, setVideoTranscribeErrorById] = useState<Record<string, string>>(
+    {},
+  );
   const [renameInputById, setRenameInputById] = useState<Record<string, string>>({});
   const [txtBatchImport, setTxtBatchImport] = useState<{
     active: boolean;
@@ -1040,6 +1051,86 @@ export function AuthorDashboard() {
       }
     },
     [address, videoAssocNovelId, videoAssocChapterId],
+  );
+
+  const transcribeVideoExtract = useCallback(
+    async (extractId: string) => {
+      if (!address) return;
+      setVideoTranscribingId(extractId);
+      setVideoTranscribeErrorById((prev) => {
+        const next = { ...prev };
+        delete next[extractId];
+        return next;
+      });
+      try {
+        const res = await fetch("/api/v1/video/transcribe", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-wallet-address": address,
+          },
+          body: JSON.stringify({ extractId }),
+        });
+        const data = await readApiJsonSafe<{ text?: string; error?: string }>(res);
+        if (!res.ok) throw new Error(data.error ?? "语音转文字失败");
+        const text = typeof data.text === "string" ? data.text : "";
+        setVideoTranscriptById((prev) => ({ ...prev, [extractId]: text }));
+      } catch (e) {
+        setVideoTranscribeErrorById((prev) => ({
+          ...prev,
+          [extractId]: e instanceof Error ? e.message : "语音转文字失败",
+        }));
+      } finally {
+        setVideoTranscribingId(null);
+      }
+    },
+    [address],
+  );
+
+  const deleteVideoExtract = useCallback(
+    async (extractId: string) => {
+      if (!address) return;
+      if (
+        !window.confirm(
+          "确定删除这条 MP3 吗？将移除工作台记录并删除服务器上的音频文件；若已关联到某章节，读者端「朗读」可能失效，需重新上传或关联。",
+        )
+      ) {
+        return;
+      }
+      setVideoExtractDeletingId(extractId);
+      try {
+        const res = await fetch(
+          `/api/v1/video/extract?extractId=${encodeURIComponent(extractId)}`,
+          {
+            method: "DELETE",
+            headers: { "x-wallet-address": address },
+          },
+        );
+        const data = await readApiJsonSafe<{ error?: string }>(res);
+        if (!res.ok) throw new Error(data.error ?? "删除失败");
+        setVideoExtractItems((prev) => prev.filter((x) => x.id !== extractId));
+        setVideoCardPanelById((prev) => {
+          const next = { ...prev };
+          delete next[extractId];
+          return next;
+        });
+        setVideoTranscriptById((prev) => {
+          const next = { ...prev };
+          delete next[extractId];
+          return next;
+        });
+        setVideoTranscribeErrorById((prev) => {
+          const next = { ...prev };
+          delete next[extractId];
+          return next;
+        });
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "删除失败");
+      } finally {
+        setVideoExtractDeletingId(null);
+      }
+    },
+    [address],
   );
 
   const openShareModal = (row: {
@@ -2134,7 +2225,8 @@ export function AuthorDashboard() {
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">视频管理</h2>
             <p className="max-w-xl text-sm text-neutral-600 dark:text-neutral-400">
-              上传 MP4，由服务器提取 MP3。在下方选择小说与章节后，点击某条提取记录右侧的「关联到章节」，读者即可在该章「朗读」页播放此音频。
+              上传 MP4，由服务器提取 MP3。每条记录可在「语音转文字」Tab 将 MP3 转为文稿（ElevenLabs）。在下方选择小说与章节后，于「MP3」Tab
+              点击「关联到章节」，读者即可在该章「朗读」页播放此音频。
             </p>
             <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950">
               <input
@@ -2229,43 +2321,148 @@ export function AuthorDashboard() {
                   <p className="mt-2 text-sm text-zinc-500">暂无记录，请先上传 MP4。</p>
                 ) : (
                   <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">
-                    {videoExtractItems.map((item) => (
-                      <li
-                        key={item.id}
-                        className="rounded-lg border border-[#2a3f5c] bg-[#0d1625] p-2.5"
-                      >
-                        <p className="truncate text-xs font-medium text-zinc-200" title={item.sourceName}>
-                          {item.sourceName}
-                        </p>
-                        <p className="text-[11px] text-zinc-500">
-                          {(item.size / (1024 * 1024)).toFixed(2)} MB ·{" "}
-                          {formatModified(item.createdAt, locale)}
-                        </p>
-                        <audio controls src={item.mp3Url} className="mt-2 w-full" preload="metadata" />
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <a
-                            href={item.mp3Url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-[11px] text-cyan-400 underline"
+                    {videoExtractItems.map((item) => {
+                      const panel = videoCardPanelById[item.id] ?? "audio";
+                      const transcript = videoTranscriptById[item.id] ?? "";
+                      const sttErr = videoTranscribeErrorById[item.id];
+                      const sttBusy = videoTranscribingId === item.id;
+                      const delBusy = videoExtractDeletingId === item.id;
+                      return (
+                        <li
+                          key={item.id}
+                          className="rounded-lg border border-[#2a3f5c] bg-[#0d1625] p-2.5"
+                        >
+                          <p
+                            className="truncate text-xs font-medium text-zinc-200"
+                            title={item.sourceName}
                           >
-                            打开链接
-                          </a>
-                          <button
-                            type="button"
-                            disabled={
-                              videoAssocLinkingId === item.id ||
-                              !videoAssocNovelId ||
-                              !videoAssocChapterId
-                            }
-                            onClick={() => void linkExtractToChapter(item.mp3Url, item.id)}
-                            className="rounded border border-emerald-500/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
-                          >
-                            {videoAssocLinkingId === item.id ? "关联中…" : "关联到章节"}
-                          </button>
-                        </div>
-                      </li>
-                    ))}
+                            {item.sourceName}
+                          </p>
+                          <p className="text-[11px] text-zinc-500">
+                            {(item.size / (1024 * 1024)).toFixed(2)} MB ·{" "}
+                            {formatModified(item.createdAt, locale)}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setVideoCardPanelById((prev) => ({ ...prev, [item.id]: "audio" }))
+                              }
+                              className={
+                                panel === "audio"
+                                  ? "rounded-md border border-violet-400/60 bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-200"
+                                  : "rounded-md border border-[#324866] bg-[#0d1625] px-2 py-0.5 text-[11px] text-zinc-400 hover:text-zinc-200"
+                              }
+                            >
+                              MP3
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setVideoCardPanelById((prev) => ({
+                                  ...prev,
+                                  [item.id]: "transcript",
+                                }))
+                              }
+                              className={
+                                panel === "transcript"
+                                  ? "rounded-md border border-violet-400/60 bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-200"
+                                  : "rounded-md border border-[#324866] bg-[#0d1625] px-2 py-0.5 text-[11px] text-zinc-400 hover:text-zinc-200"
+                              }
+                            >
+                              语音转文字
+                            </button>
+                          </div>
+                          {panel === "audio" ? (
+                            <>
+                              <audio
+                                controls
+                                src={item.mp3Url}
+                                className="mt-2 w-full"
+                                preload="metadata"
+                              />
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <a
+                                  href={item.mp3Url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[11px] text-cyan-400 underline"
+                                >
+                                  打开链接
+                                </a>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    videoAssocLinkingId === item.id ||
+                                    !videoAssocNovelId ||
+                                    !videoAssocChapterId
+                                  }
+                                  onClick={() => void linkExtractToChapter(item.mp3Url, item.id)}
+                                  className="rounded border border-emerald-500/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
+                                >
+                                  {videoAssocLinkingId === item.id ? "关联中…" : "关联到章节"}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    delBusy ||
+                                    videoAssocLinkingId === item.id ||
+                                    sttBusy
+                                  }
+                                  onClick={() => void deleteVideoExtract(item.id)}
+                                  className="rounded-md border border-rose-500/45 bg-rose-500/10 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-40"
+                                >
+                                  {delBusy ? "删除中…" : "删除 MP3"}
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              <p className="text-[11px] leading-relaxed text-zinc-500">
+                                使用 ElevenLabs Speech-to-Text（scribe_v2）识别当前 MP3。需在服务器环境变量中配置{" "}
+                                <span className="font-mono text-zinc-400">ELEVENLABS_API_KEY</span>
+                                。
+                              </p>
+                              {sttErr ? (
+                                <p className="text-[11px] text-rose-400">{sttErr}</p>
+                              ) : null}
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  disabled={sttBusy}
+                                  onClick={() => void transcribeVideoExtract(item.id)}
+                                  className="rounded-lg border border-violet-500/50 bg-violet-500/10 px-3 py-1 text-[11px] font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+                                >
+                                  {sttBusy ? "识别中…" : transcript ? "重新识别" : "开始识别"}
+                                </button>
+                                {transcript ? (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        await navigator.clipboard.writeText(transcript);
+                                      } catch {
+                                        window.alert("复制失败，请手动选择文本复制");
+                                      }
+                                    }}
+                                    className="rounded-lg border border-[#324866] px-3 py-1 text-[11px] text-zinc-300 hover:bg-[#1a2a40]"
+                                  >
+                                    复制全文
+                                  </button>
+                                ) : null}
+                              </div>
+                              <textarea
+                                readOnly
+                                value={transcript}
+                                placeholder={sttBusy ? "正在识别…" : "识别结果将显示在这里"}
+                                rows={8}
+                                className="w-full resize-y rounded-md border border-[#324866] bg-[#0a1018] px-2 py-1.5 font-mono text-[11px] leading-relaxed text-zinc-200 placeholder:text-zinc-600"
+                              />
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>

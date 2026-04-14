@@ -228,7 +228,7 @@ export default function ReaderArticlePage({
           generating: "生成二维码中…",
           chapterWordsApprox: (n: number) => `本章约 ${n.toLocaleString("zh-CN")} 字`,
           authorNarrationTitle: "作者上传的朗读音频",
-          authorNarrationHint: "以下为作者为本章提供的 MP3。仍可使用下方在线合成或浏览器朗读。",
+          authorNarrationHint: "本章由作者提供朗读 MP3，不再显示在线合成朗读（避免重复）。",
         }
       : {
           back: "← Back to Library",
@@ -277,7 +277,7 @@ export default function ReaderArticlePage({
           chapterWordsApprox: (n: number) => `Approx. ${n.toLocaleString("en-US")} words/chars`,
           authorNarrationTitle: "Author narration (MP3)",
           authorNarrationHint:
-            "The author attached this MP3 for this chapter. You can still use server synthesis or browser read-aloud below.",
+            "This chapter uses the author’s MP3. Server-side “generate MP3” is hidden to avoid duplication.",
         };
   const langZoneLabel = localizedLanguageLabel(
     article?.language,
@@ -878,6 +878,8 @@ export default function ReaderArticlePage({
   }, [chapterIndex]);
 
   useEffect(() => {
+    const narr = article?.chapters?.[chapterIndex]?.narrationAudioUrl?.trim();
+    if (narr) return;
     let cancelled = false;
     void (async () => {
       const hit = await checkServerCachedMp3();
@@ -888,7 +890,7 @@ export default function ReaderArticlePage({
     return () => {
       cancelled = true;
     };
-  }, [checkServerCachedMp3, handleGenerateMp3]);
+  }, [article, chapterIndex, checkServerCachedMp3, handleGenerateMp3]);
 
   useEffect(() => {
     return () => {
@@ -1175,7 +1177,7 @@ export default function ReaderArticlePage({
                     />
                     <p className="mt-2 text-[11px] text-zinc-500">{t.authorNarrationHint}</p>
                   </div>
-                ) : null}
+                ) : (
                   <div className="rounded-lg border border-[#1f3048] bg-[#0b1422] p-3">
                     <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[#21324a] pb-3">
                       <button
@@ -1248,7 +1250,8 @@ export default function ReaderArticlePage({
                       ) : null}
                     </div>
                   </div>
-                </div>
+                )}
+              </div>
 
               <div className="mt-5 flex items-center justify-between">
                 <button

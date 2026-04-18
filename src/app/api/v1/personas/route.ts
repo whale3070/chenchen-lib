@@ -2,6 +2,7 @@ import { isAddress } from "viem";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 import type { Persona } from "@chenchen/shared/types";
@@ -65,7 +66,7 @@ export async function GET(req: NextRequest) {
   const fp = await personasFilePath(authorId, novelId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as PersonasFile;
+    const data = parseLeadingJsonValue(raw) as PersonasFile;
     if (!data || !Array.isArray(data.personas)) {
       return NextResponse.json({
         personas: null,

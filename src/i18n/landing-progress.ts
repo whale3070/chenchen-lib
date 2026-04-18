@@ -6,6 +6,24 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 4 月 17 日（第二十天）",
+    title: "开发进度",
+    items: [
+      "邮箱/密码登录的功能。",
+      "管理员后台能够手动增加/减少 VIP 会员的功能。",
+      "用户未指定界面语言、未连接钱包时，按访问 IP 所在地区默认显示语言（如内地简体，港/台繁体）。",
+    ],
+  },
+  {
+    dateLabel: "2026 年 4 月 17 日（第十九天）",
+    title: "开发进度",
+    items: [
+      "作者工作台「多语言翻译」：新增多语已译稿一览，支持按章节切换语种预览已落盘译文，并链到书库对应语言页；新增 chapter-preview 等接口。",
+      "发布配置在「AI 自动排版（保留图片）」下支持作者填写补充说明（prompt），写入发布 JSON 并由 AI 排版 worker 拼入 DeepSeek 提示词（与不改剧情、保留图片占位等硬规则冲突时以硬规则为准，约 2000 字上限）。",
+      "首页开发进度已同步：http://whale3070.com:3000/",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 14 日（第十六天）",
     title: "开发进度",
     items: [
@@ -160,6 +178,24 @@ const ZH: ProgressStage[] = [
 ];
 
 const EN: ProgressStage[] = [
+  {
+    dateLabel: "April 17, 2026 (day 20)",
+    title: "Progress",
+    items: [
+      "Email + password sign-in.",
+      "Admin tools (ADMIN_ADDRESS): manually grant, extend, or revoke paid (VIP) membership from the workspace.",
+      "When the user has not chosen a UI language and is not connected with a wallet, default the UI language from IP geolocation (e.g. simplified Chinese for mainland China, traditional Chinese for Hong Kong / Taiwan).",
+    ],
+  },
+  {
+    dateLabel: "April 17, 2026 (day 19)",
+    title: "Progress",
+    items: [
+      "Author workspace → Multilingual translation: overview of saved per-language drafts by chapter, language switcher for read-only previews, and links to the library in each language; added chapter-preview API.",
+      "Publish settings → “AI auto layout (keep images)”: optional author instructions (prompt) saved on the publish record and passed into the background reflow worker / DeepSeek prompt (core safety rules win on conflict; length capped around 2000 chars).",
+      "Landing timeline updated: http://whale3070.com:3000/",
+    ],
+  },
   {
     dateLabel: "April 14, 2026 (day 16)",
     title: "Progress",
@@ -320,5 +356,9 @@ const EN: ProgressStage[] = [
 
 /** Non-Chinese locales use the English timeline until dedicated copy exists. */
 export function getLandingProgressTimeline(locale: string): ProgressStage[] {
-  return locale === "zh-CN" ? ZH : EN;
+  const k = locale.trim().toLowerCase();
+  if (k === "zh-cn" || k === "zh-tw" || k === "zh-hk" || k === "zh-mo") {
+    return ZH;
+  }
+  return EN;
 }

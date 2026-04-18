@@ -7,10 +7,13 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** 大文件上传 + ffmpeg；Vercel 等会生效。自建反代须同步调大 Nginx 超时（见 nginx-long-api.example.conf） */
+export const maxDuration = 900;
 
 const execFileAsync = promisify(execFile);
 
@@ -79,7 +82,7 @@ async function readIndex(authorLower: string): Promise<VideoExtractIndex> {
   const fp = indexPath(authorLower);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as VideoExtractIndex;
+    const data = parseLeadingJsonValue(raw) as VideoExtractIndex;
     if (data && Array.isArray(data.items)) {
       return { authorId: authorLower, items: data.items };
     }
@@ -250,14 +253,19 @@ export async function POST(req: NextRequest) {
           "ffmpeg",
           [
             "-nostdin",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             inPath,
             "-vn",
             "-acodec",
             "libmp3lame",
-            "-q:a",
-            "4",
+            // CBR 略快于 VBR，长 Opus/MP4 转码不易触发反代读超时
+            "-b:a",
+            "160k",
+            "-f",
+            "mp3",
             outPath,
           ],
           { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 20 * 1024 * 1024 },

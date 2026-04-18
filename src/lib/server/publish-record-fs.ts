@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { NovelPublishRecord } from "@/lib/novel-publish";
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 
 export function safeNovelSegment(novelId: string) {
   return novelId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
@@ -23,7 +24,7 @@ export async function readPublishRecordFs(
   const fp = publishFilePath(authorLower, novelId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    return JSON.parse(raw) as NovelPublishRecord;
+    return parseLeadingJsonValue(raw) as NovelPublishRecord;
   } catch (e: unknown) {
     const code =
       e && typeof e === "object" && "code" in e

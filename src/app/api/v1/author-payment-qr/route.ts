@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { isAddress } from "viem";
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -58,7 +59,7 @@ export async function GET(req: NextRequest) {
   const fp = paymentQrFilePath(authorId.toLowerCase(), novelId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as PaymentQrRecord;
+    const data = parseLeadingJsonValue(raw) as PaymentQrRecord;
     return NextResponse.json({ record: data });
   } catch (e: unknown) {
     const code =

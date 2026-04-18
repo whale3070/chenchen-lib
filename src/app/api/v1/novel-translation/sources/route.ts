@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -114,13 +115,43 @@ function htmlToPlainText(html: string) {
     .trim();
 }
 
+function translatedLangsForChapter(
+  store: TranslationStoreLite | null,
+  chapterId: string,
+): string[] {
+  if (!store?.languages) return [];
+  const out: string[] = [];
+  for (const [langCode, langNode] of Object.entries(store.languages)) {
+    const code = langCode.trim().toLowerCase();
+    if (!code) continue;
+    const text = langNode?.chapters?.[chapterId]?.translatedText;
+    if (typeof text === "string" && text.trim()) out.push(code);
+  }
+  out.sort();
+  return out;
+}
+
+function novelTranslationLanguageUnion(
+  store: TranslationStoreLite | null,
+  chapterIds: string[],
+): string[] {
+  const set = new Set<string>();
+  if (!store?.languages) return [];
+  for (const chId of chapterIds) {
+    for (const lang of translatedLangsForChapter(store, chId)) {
+      set.add(lang);
+    }
+  }
+  return [...set].sort();
+}
+
 async function readPublishRecord(
   authorLower: string,
   novelId: string,
 ): Promise<PublishRecordLite | null> {
   try {
     const raw = await fs.readFile(publishPath(authorLower, novelId), "utf8");
-    return JSON.parse(raw) as PublishRecordLite;
+    return parseLeadingJsonValue(raw) as PublishRecordLite;
   } catch (e: unknown) {
     const code =
       e && typeof e === "object" && "code" in e
@@ -150,17 +181,19 @@ export async function GET(req: NextRequest) {
     preview: string;
     isPublished: boolean;
     hasEnglishTranslation: boolean;
+    translatedLangs: string[];
   }> = [];
+  let novelTranslatedLanguages: string[] = [];
 
   try {
     const raw = await fs.readFile(structurePath(wh.walletLower, novelId), "utf8");
-    const structure = JSON.parse(raw) as StructurePayload;
+    const structure = parseLeadingJsonValue(raw) as StructurePayload;
     const chapterNodes = (structure.nodes ?? []).filter((n) => n.kind === "chapter");
     const publishRecord = await readPublishRecord(wh.walletLower, novelId);
     let store: TranslationStoreLite | null = null;
     try {
       const sraw = await fs.readFile(translationStorePath(wh.walletLower, novelId), "utf8");
-      store = JSON.parse(sraw) as TranslationStoreLite;
+      store = parseLeadingJsonValue(sraw) as TranslationStoreLite;
     } catch (e: unknown) {
       const code =
         e && typeof e === "object" && "code" in e
@@ -168,7 +201,6 @@ export async function GET(req: NextRequest) {
           : undefined;
       if (code !== "ENOENT") throw e;
     }
-    const enChapters = store?.languages?.en?.chapters ?? {};
     const publishIds = new Set(publishRecord?.publishedChapterIds ?? []);
     const publishAll =
       publishRecord?.visibility === "public" && publishIds.size === 0;
@@ -181,18 +213,21 @@ export async function GET(req: NextRequest) {
           n.metadata?.chapterHtmlDesktop ??
           n.metadata?.chapterHtml;
         const text = typeof htmlCandidate === "string" ? htmlToPlainText(htmlCandidate) : "";
+        const translatedLangs = translatedLangsForChapter(store, id);
         return {
           id,
           title: typeof n.title === "string" && n.title.trim() ? n.title.trim() : "未命名章节",
           preview: text.slice(0, 120),
           isPublished: publishAll || publishIds.has(id),
-          hasEnglishTranslation: Boolean(
-            typeof enChapters[id]?.translatedText === "string" &&
-              enChapters[id]?.translatedText?.trim(),
-          ),
+          hasEnglishTranslation: translatedLangs.includes("en"),
+          translatedLangs,
         };
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
+    novelTranslatedLanguages = novelTranslationLanguageUnion(
+      store,
+      chapters.map((c) => c.id),
+    );
   } catch (e: unknown) {
     const code =
       e && typeof e === "object" && "code" in e
@@ -204,7 +239,7 @@ export async function GET(req: NextRequest) {
   let hasDraft = false;
   try {
     const raw = await fs.readFile(draftPath(wh.walletLower, novelId), "utf8");
-    const draft = JSON.parse(raw) as { html?: unknown };
+    const draft = parseLeadingJsonValue(raw) as { html?: unknown };
     hasDraft = typeof draft.html === "string" && draft.html.trim().length > 0;
   } catch (e: unknown) {
     const code =
@@ -214,5 +249,9 @@ export async function GET(req: NextRequest) {
     if (code !== "ENOENT") throw e;
   }
 
-  return NextResponse.json({ chapters, hasDraft });
+  return NextResponse.json({
+    chapters,
+    hasDraft,
+    novelTranslatedLanguages,
+  });
 }

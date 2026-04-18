@@ -5,6 +5,7 @@ import path from "node:path";
 import { isAddress } from "viem";
 
 import { getDraftFilePath } from "@/lib/draft-path";
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -69,6 +70,7 @@ type ChapterContentPayload = {
   chapterHtml?: string;
   chapterHtmlDesktop?: string;
   chapterHtmlMobile?: string;
+  updatedAt?: string;
 };
 
 type AuthorNovelIndex = {
@@ -121,7 +123,7 @@ async function readPublishRecords() {
     const filePath = path.join(dir, file.name);
     try {
       const raw = await fs.readFile(filePath, "utf8");
-      const data = JSON.parse(raw) as PublishRecordLite;
+      const data = parseLeadingJsonValue(raw) as PublishRecordLite;
       // 兼容旧/异常发布记录：若缺 authorId 或 novelId，尝试从文件名回填。
       // 文件名形如 <authorLower>_<safeNovelId>.json
       if (!data.authorId || !data.novelId) {
@@ -151,7 +153,7 @@ async function readAudiobookRecords() {
     const filePath = path.join(dir, file.name);
     try {
       const raw = await fs.readFile(filePath, "utf8");
-      const parsed = JSON.parse(raw) as { items?: AudiobookRecord[] };
+      const parsed = parseLeadingJsonValue(raw) as { items?: AudiobookRecord[] };
       if (!Array.isArray(parsed.items)) continue;
       for (const row of parsed.items) out.push(row);
     } catch {
@@ -171,7 +173,7 @@ async function readNovelTitle(authorId: string, novelId: string): Promise<string
   );
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as AuthorNovelIndex;
+    const data = parseLeadingJsonValue(raw) as AuthorNovelIndex;
     const n = data.novels?.find((x) => x.id === novelId);
     const title = typeof n?.title === "string" ? n.title.trim() : "";
     return title || null;
@@ -284,12 +286,18 @@ async function readTranslationStore(
 ): Promise<TranslationStore | null> {
   try {
     const raw = await fs.readFile(translationStorePath(authorId, novelId), "utf8");
-    const parsed = JSON.parse(raw) as TranslationStore;
+    const parsed = parseLeadingJsonValue(raw) as TranslationStore;
     if (!parsed || typeof parsed !== "object") return null;
     return parsed;
   } catch {
     return null;
   }
+}
+
+function parseIsoTimeMs(iso: string | undefined): number {
+  if (!iso || typeof iso !== "string") return 0;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? 0 : t;
 }
 
 async function readChapterContentMap(
@@ -321,7 +329,7 @@ async function readChapterContentMap(
       .map(async (name) => {
         try {
           const raw = await fs.readFile(path.join(dir, name), "utf8");
-          const data = JSON.parse(raw) as ChapterContentPayload;
+          const data = parseLeadingJsonValue(raw) as ChapterContentPayload;
           const id = typeof data.chapterId === "string" ? data.chapterId.trim() : "";
           if (id) out[id] = data;
         } catch {
@@ -675,7 +683,7 @@ export async function GET(req: NextRequest) {
   let updatedAt = "";
   try {
     const raw = await fs.readFile(draftPath, "utf8");
-    const draft = JSON.parse(raw) as { html?: string; updatedAt?: string };
+    const draft = parseLeadingJsonValue(raw) as { html?: string; updatedAt?: string };
     html = draft.html ?? "";
     updatedAt = draft.updatedAt ?? "";
   } catch {
@@ -691,7 +699,7 @@ export async function GET(req: NextRequest) {
   let paymentQrImageDataUrl: string | null = null;
   try {
     const raw = await fs.readFile(paymentQrPath, "utf8");
-    const qr = JSON.parse(raw) as { imageDataUrl?: string };
+    const qr = parseLeadingJsonValue(raw) as { imageDataUrl?: string };
     if (typeof qr.imageDataUrl === "string" && qr.imageDataUrl.trim()) {
       paymentQrImageDataUrl = qr.imageDataUrl;
     }
@@ -723,30 +731,63 @@ export async function GET(req: NextRequest) {
   let chapters: ChapterOut[] = [];
   try {
     const raw = await fs.readFile(structurePath, "utf8");
-    const structure = JSON.parse(raw) as StructurePayload;
+    const structure = parseLeadingJsonValue(raw) as StructurePayload;
     const chapterContentMap = await readChapterContentMap(rec.data.authorId, rec.data.novelId);
     const chapterNodes =
       structure.nodes?.filter(
         (n) => n.kind === "chapter" && typeof n.title === "string",
       ) ?? [];
+    const structureUpdatedMs = parseIsoTimeMs(structure.updatedAt);
     chapters = chapterNodes.map((n) => {
       const storedContent = chapterContentMap[n.id];
-      const rawHtml =
-        (preferMobile
+      const storedUpdatedMs = parseIsoTimeMs(storedContent?.updatedAt);
+
+      const metaMobile =
+        typeof n.metadata?.chapterHtmlMobile === "string"
+          ? n.metadata.chapterHtmlMobile.trim()
+          : "";
+      const metaDesktop =
+        typeof n.metadata?.chapterHtmlDesktop === "string"
+          ? n.metadata.chapterHtmlDesktop.trim()
+          : "";
+      const metaPlain =
+        typeof n.metadata?.chapterHtml === "string" ? n.metadata.chapterHtml.trim() : "";
+      const pickMeta = preferMobile ? metaMobile || metaPlain : metaDesktop || metaPlain;
+
+      const storedPick =
+        preferMobile
           ? storedContent?.chapterHtmlMobile ?? storedContent?.chapterHtml
-          : storedContent?.chapterHtmlDesktop ?? storedContent?.chapterHtml) ??
-        (preferMobile
-          ? n.metadata?.chapterHtmlMobile ?? n.metadata?.chapterHtml
-          : n.metadata?.chapterHtmlDesktop ?? n.metadata?.chapterHtml);
-      const chapterHtml =
-        typeof rawHtml === "string" && rawHtml.trim().length > 0
-          ? rawHtml
-          : "<p></p>";
-      const rawMd = storedContent?.chapterMarkdown ?? n.metadata?.chapterMarkdown;
-      const chapterMarkdown =
-        typeof rawMd === "string" && rawMd.trim().length > 0
-          ? rawMd
-          : undefined;
+          : storedContent?.chapterHtmlDesktop ?? storedContent?.chapterHtml;
+      const pickStored = typeof storedPick === "string" ? storedPick.trim() : "";
+
+      let chapterHtml: string;
+      if (pickMeta && pickStored && pickMeta !== pickStored) {
+        chapterHtml = structureUpdatedMs >= storedUpdatedMs ? pickMeta : pickStored;
+      } else if (pickMeta) {
+        chapterHtml = pickMeta;
+      } else if (pickStored) {
+        chapterHtml = pickStored;
+      } else {
+        chapterHtml = "<p></p>";
+      }
+
+      const mdMeta =
+        typeof n.metadata?.chapterMarkdown === "string" ? n.metadata.chapterMarkdown.trim() : "";
+      const mdStored =
+        typeof storedContent?.chapterMarkdown === "string"
+          ? storedContent.chapterMarkdown.trim()
+          : "";
+      let chapterMarkdown: string | undefined;
+      if (mdMeta && mdStored && mdMeta !== mdStored) {
+        chapterMarkdown = structureUpdatedMs >= storedUpdatedMs ? mdMeta : mdStored;
+      } else if (mdMeta) {
+        chapterMarkdown = mdMeta;
+      } else if (mdStored) {
+        chapterMarkdown = mdStored;
+      } else {
+        chapterMarkdown = undefined;
+      }
+
       const out: ChapterOut = {
         id: n.id,
         title: n.title.trim() || "未命名章节",
@@ -803,7 +844,7 @@ export async function GET(req: NextRequest) {
     const fp = readerUnlockFilePath(articleId, wallet.toLowerCase());
     try {
       const raw = await fs.readFile(fp, "utf8");
-      const data = JSON.parse(raw) as { unlocked?: boolean };
+      const data = parseLeadingJsonValue(raw) as { unlocked?: boolean };
       unlocked = data.unlocked === true;
     } catch {
       unlocked = false;

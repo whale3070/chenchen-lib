@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { WalletConnect } from "@/components/wallet-connect";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
+import { useAuthStore } from "@/store/auth-store";
 
 type TicketItem = {
   id: string;
@@ -38,7 +39,8 @@ function formatModified(iso: string) {
 }
 
 export default function WorkspaceTicketsPage() {
-  const { address, isConnected, isConnectPending } = useWeb3Auth();
+  const { isConnectPending } = useWeb3Auth();
+  const authorId = useAuthStore((s) => s.authorId);
   const [items, setItems] = useState<TicketItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export default function WorkspaceTicketsPage() {
   const [adminNotes, setAdminNotes] = useState<Record<string, string>>({});
 
   const loadTickets = useCallback(async () => {
-    if (!address) return;
+    if (!authorId) return;
     setLoading(true);
     setError(null);
     try {
@@ -58,7 +60,7 @@ export default function WorkspaceTicketsPage() {
       if (statusFilter !== "all") params.set("status", statusFilter);
       const query = params.toString();
       const res = await fetch(`/api/v1/tickets${query ? `?${query}` : ""}`, {
-        headers: { "x-wallet-address": address },
+        headers: { "x-wallet-address": authorId },
       });
       const data = (await res.json()) as {
         items?: TicketItem[];
@@ -74,16 +76,16 @@ export default function WorkspaceTicketsPage() {
     } finally {
       setLoading(false);
     }
-  }, [address, mineOnly, statusFilter]);
+  }, [authorId, mineOnly, statusFilter]);
 
   useEffect(() => {
-    if (!address) {
+    if (!authorId) {
       setItems([]);
       setIsAdmin(false);
       return;
     }
     void loadTickets();
-  }, [address, loadTickets]);
+  }, [authorId, loadTickets]);
 
   useEffect(() => {
     if (!isAdmin && mineOnly === false) {
@@ -93,7 +95,7 @@ export default function WorkspaceTicketsPage() {
 
   const handleUpdateStatus = useCallback(
     async (ticketId: string, status: TicketItem["status"]) => {
-      if (!address || !isAdmin || updatingId) return;
+      if (!authorId || !isAdmin || updatingId) return;
       setUpdatingId(ticketId);
       setError(null);
       try {
@@ -101,7 +103,7 @@ export default function WorkspaceTicketsPage() {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
-            "x-wallet-address": address,
+            "x-wallet-address": authorId,
           },
           body: JSON.stringify({
             status,
@@ -117,7 +119,7 @@ export default function WorkspaceTicketsPage() {
         setUpdatingId(null);
       }
     },
-    [address, adminNotes, isAdmin, loadTickets, updatingId],
+    [authorId, adminNotes, isAdmin, loadTickets, updatingId],
   );
 
   const statusOptions = useMemo(
@@ -177,7 +179,7 @@ export default function WorkspaceTicketsPage() {
             <button
               type="button"
               onClick={() => void loadTickets()}
-              disabled={loading || !address}
+              disabled={loading || !authorId}
               className="rounded border border-[#324866] px-2.5 py-1 text-xs text-zinc-300 hover:bg-[#0d1625] disabled:opacity-50"
             >
               {loading ? "刷新中…" : "刷新"}
@@ -185,9 +187,9 @@ export default function WorkspaceTicketsPage() {
           </div>
         </div>
 
-        {!isConnected ? (
+        {!authorId ? (
           <p className="rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4 text-sm text-zinc-400">
-            请先连接钱包后查看工单。
+            请先使用邮箱登录或连接钱包后再查看工单。
             {isConnectPending ? "（连接中…）" : ""}
           </p>
         ) : error ? (

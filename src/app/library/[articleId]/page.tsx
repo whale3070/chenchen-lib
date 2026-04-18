@@ -179,6 +179,8 @@ export default function ReaderArticlePage({
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const audioAbortRef = useRef<AbortController | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  /** 同一次 SPA 内对同一 articleId 只上报一次；跨日重复打开由服务端按 IP+日去重 */
+  const uvReportedArticleIdRef = useRef<string | null>(null);
   const uiLang = article?.language === "zh" || !article?.language ? "zh" : "en";
   const t =
     uiLang === "zh"
@@ -351,6 +353,18 @@ export default function ReaderArticlePage({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, address, articleId, langParam]);
+
+  useEffect(() => {
+    if (loading || !article?.articleId) return;
+    if (uvReportedArticleIdRef.current === article.articleId) return;
+    uvReportedArticleIdRef.current = article.articleId;
+    void fetch("/api/v1/analytics/article-view", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ articleId: article.articleId }),
+      keepalive: true,
+    }).catch(() => {});
+  }, [article, loading]);
 
   const currentChapter = useMemo(
     () => article?.chapters?.[chapterIndex] ?? null,

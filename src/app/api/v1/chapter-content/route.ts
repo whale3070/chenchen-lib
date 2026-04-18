@@ -2,6 +2,11 @@ import { isAddress } from "viem";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
+import {
+  chapterContentFilePath,
+  writeChapterContentDisk,
+} from "@/lib/server/chapter-content-fs";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -46,8 +51,8 @@ async function chapterDir(authorId: string, docId: string): Promise<string> {
 }
 
 async function chapterPath(authorId: string, docId: string, chapterId: string): Promise<string> {
-  const dir = await chapterDir(authorId, docId);
-  return path.join(dir, `${safeId(chapterId)}.json`);
+  await chapterDir(authorId, docId);
+  return chapterContentFilePath(process.cwd(), authorId, docId, chapterId);
 }
 
 function structurePath(authorId: string, docId: string): string {
@@ -118,7 +123,7 @@ async function ensureLegacyStructureMigrated(authorId: string, docId: string): P
   }
 
   if (raw) {
-    const parsed = JSON.parse(raw) as StructureFilePayload;
+    const parsed = parseLeadingJsonValue(raw) as StructureFilePayload;
     const nodes = Array.isArray(parsed?.nodes) ? parsed.nodes : [];
     const writes: Promise<void>[] = [];
     for (const n of nodes) {
@@ -167,15 +172,13 @@ export async function POST(req: NextRequest) {
   if (!chapterId) return badRequest("Invalid chapterId");
 
   const content = normalizeBody(b);
-  const payload: ChapterContentPayload = {
+  const updatedAt = await writeChapterContentDisk({
+    authorLower: authorId.toLowerCase(),
+    novelId: docId,
     chapterId,
-    ...content,
-    updatedAt: new Date().toISOString(),
-  };
-
-  const fp = await chapterPath(authorId, docId, chapterId);
-  await fs.writeFile(fp, JSON.stringify(payload), "utf8");
-  return NextResponse.json({ ok: true, updatedAt: payload.updatedAt });
+    payload: { ...content },
+  });
+  return NextResponse.json({ ok: true, updatedAt });
 }
 
 export async function GET(req: NextRequest) {
@@ -188,7 +191,7 @@ export async function GET(req: NextRequest) {
     const fp = await chapterPath(authorId, docId, chapterId);
     try {
       const raw = await fs.readFile(fp, "utf8");
-      const data = JSON.parse(raw) as ChapterContentPayload;
+      const data = parseLeadingJsonValue(raw) as ChapterContentPayload;
       return NextResponse.json({ chapterId, content: data ?? null });
     } catch (e: unknown) {
       const code = e && typeof e === "object" && "code" in e ? (e as NodeJS.ErrnoException).code : undefined;
@@ -196,7 +199,7 @@ export async function GET(req: NextRequest) {
         await ensureLegacyStructureMigrated(authorId, docId);
         try {
           const raw = await fs.readFile(fp, "utf8");
-          const data = JSON.parse(raw) as ChapterContentPayload;
+          const data = parseLeadingJsonValue(raw) as ChapterContentPayload;
           return NextResponse.json({ chapterId, content: data ?? null });
         } catch (e2: unknown) {
           const code2 =
@@ -227,7 +230,7 @@ export async function GET(req: NextRequest) {
           const fp = path.join(dir, name);
           try {
             const raw = await fs.readFile(fp, "utf8");
-            const data = JSON.parse(raw) as ChapterContentPayload;
+            const data = parseLeadingJsonValue(raw) as ChapterContentPayload;
             const id = typeof data?.chapterId === "string" ? data.chapterId : "";
             if (id) out[id] = data;
           } catch {

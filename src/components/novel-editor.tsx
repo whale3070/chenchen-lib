@@ -19,7 +19,7 @@ import {
   type ClipboardEvent,
 } from "react";
 
-import { FileDown, FileUp, Rocket } from "lucide-react";
+import { FileDown, FileUp, Languages, Rocket } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
@@ -1464,7 +1464,14 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
         }
       };
       try {
-        if (chapterNode && mode === "chapter_patch") {
+        if (mode === "full") {
+          const syncList = nodes.filter(
+            (n) => n.kind === "chapter" && chapterContentPayloadFromNode(n) != null,
+          );
+          if (syncList.length > 0) {
+            await Promise.all(syncList.map((n) => postChapterContent(n)));
+          }
+        } else if (chapterNode && mode === "chapter_patch") {
           await postChapterContent(chapterNode);
         }
         let r: Response;
@@ -1631,6 +1638,7 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       updateCommitment: "none" | number;
       refundRuleAck: boolean;
       layoutMode: PublishLayoutMode;
+      aiReflowAuthorPrompt: string;
     }) => {
       if (!authorId) throw new Error("请先连接钱包");
       const runPublish = async (alreadyNotifiedAiReflow: boolean) => {
@@ -3876,6 +3884,32 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
               <Rocket className="h-3.5 w-3.5 shrink-0" aria-hidden />
               {hasPublishSave ? "已发布" : "发布小说"}
             </button>
+            <Link
+              href={`/editor/${encodeURIComponent(novelId)}/translations`}
+              title="管理各语言译本与章节译文"
+              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-800 transition-colors hover:bg-neutral-50 disabled:pointer-events-none disabled:opacity-40 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+            >
+              <Languages className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              翻译管理
+            </Link>
+            {publishRecord?.articleId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const aid = publishRecord?.articleId?.trim() ?? "";
+                  if (!aid) return;
+                  window.open(
+                    `/library/${encodeURIComponent(aid)}`,
+                    "_blank",
+                    "noopener,noreferrer",
+                  );
+                }}
+                title="在新标签打开读者端作品页"
+                className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-cyan-600/45 bg-cyan-500/10 px-2.5 py-1.5 text-xs font-medium text-cyan-800 dark:text-cyan-200"
+              >
+                读者预览
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => {

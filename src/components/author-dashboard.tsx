@@ -7,8 +7,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { WalletConnect } from "@/components/wallet-connect";
+import { WorkspaceAuthGate } from "@/components/workspace-auth-gate";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 import { useSiteLocale } from "@/providers/site-locale-provider";
+import { useAuthStore } from "@/store/auth-store";
 import { chapterizeTxtViaApi, decodeTxtAuto } from "@/lib/txt-import-chapterize";
 import {
   derivePublishDisplayStatus,
@@ -35,6 +37,7 @@ type Tab =
   | "translation"
   | "analytics"
   | "tickets"
+  | "adminMembers"
   | "settings";
 type VideoMaterialId = "clean-carpet" | "cut-soap";
 type VideoVoiceId = "gentle-female" | "warm-male" | "energetic-girl";
@@ -45,6 +48,8 @@ type PublishRow = {
   novelTitle: string;
   record: NovelPublishRecord | null;
 };
+
+type ArticleUvStats = { uv7: number; uv30: number; today: number };
 
 type ActiveWalletAnalytics = {
   range: string;
@@ -77,6 +82,16 @@ type TicketItem = {
   updatedAt: string;
   closedBy: string | null;
   adminNote: string;
+};
+
+type VipMemberRow = {
+  address: string;
+  record: {
+    status: string;
+    currentPeriodEnd: string;
+    updatedAt?: string;
+  };
+  active: boolean;
 };
 
 type UploadedAudioItem = {
@@ -232,13 +247,9 @@ async function readApiJsonSafe<T extends Record<string, unknown>>(
 
 export function AuthorDashboard() {
   const router = useRouter();
-  const {
-    address,
-    isConnected,
-    status,
-    requestConnect,
-    isConnectPending,
-  } = useWeb3Auth();
+  const { status, isConnectPending } = useWeb3Auth();
+  const authorId = useAuthStore((s) => s.authorId);
+  const sessionResolved = useAuthStore((s) => s.sessionResolved);
   const { t, locale } = useSiteLocale();
 
   const [tab, setTab] = useState<Tab>("novels");
@@ -268,6 +279,9 @@ export function AuthorDashboard() {
     PublishRow[]
   >([]);
   const [loadingPublish, setLoadingPublish] = useState(false);
+  const [articleUvByArticleId, setArticleUvByArticleId] = useState<
+    Record<string, ArticleUvStats>
+  >({});
   const [shareOpen, setShareOpen] = useState(false);
   const [sharePayload, setSharePayload] = useState<{
     title: string;
@@ -306,8 +320,23 @@ export function AuthorDashboard() {
       preview: string;
       isPublished: boolean;
       hasEnglishTranslation: boolean;
+      translatedLangs: string[];
     }>
   >([]);
+  const [novelTranslatedLanguages, setNovelTranslatedLanguages] = useState<string[]>(
+    [],
+  );
+  const [translationPreviewChapterId, setTranslationPreviewChapterId] =
+    useState("");
+  const [translationPreviewLang, setTranslationPreviewLang] = useState("");
+  const [translationPreviewText, setTranslationPreviewText] = useState("");
+  const [translationPreviewUpdatedAt, setTranslationPreviewUpdatedAt] = useState<
+    string | null
+  >(null);
+  const [translationPreviewLoading, setTranslationPreviewLoading] = useState(false);
+  const [translationPreviewError, setTranslationPreviewError] = useState<string | null>(
+    null,
+  );
   const [translationHasDraft, setTranslationHasDraft] = useState(false);
   const [translationChapterId, setTranslationChapterId] = useState("");
   const [translationSourcePreview, setTranslationSourcePreview] = useState("");
@@ -340,6 +369,13 @@ export function AuthorDashboard() {
   const [ticketImagePreviewUrls, setTicketImagePreviewUrls] = useState<string[]>([]);
   const [ticketUploadingImages, setTicketUploadingImages] = useState(false);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
+  const [vipAdmin, setVipAdmin] = useState<boolean | null>(null);
+  const [vipMembers, setVipMembers] = useState<VipMemberRow[]>([]);
+  const [vipLoading, setVipLoading] = useState(false);
+  const [vipError, setVipError] = useState<string | null>(null);
+  const [vipGrantWallet, setVipGrantWallet] = useState("");
+  const [vipGrantDays, setVipGrantDays] = useState(30);
+  const [vipSubmitting, setVipSubmitting] = useState(false);
   const [audioUploading, setAudioUploading] = useState(false);
   const [audioUploadProgress, setAudioUploadProgress] = useState(0);
   const [audioUploadError, setAudioUploadError] = useState<string | null>(null);
@@ -389,13 +425,13 @@ export function AuthorDashboard() {
    */
 
   const loadNovels = useCallback(async () => {
-    if (!address) return;
+    if (!authorId) return;
     setLoadingList(true);
     try {
       const res = await fetch(
-        `/api/v1/novels?authorId=${encodeURIComponent(address)}`,
+        `/api/v1/novels?authorId=${encodeURIComponent(authorId)}`,
         {
-          headers: { "x-wallet-address": address },
+          headers: { "x-wallet-address": authorId },
         },
       );
       const data = await readApiJsonSafe<{
@@ -410,15 +446,15 @@ export function AuthorDashboard() {
     } finally {
       setLoadingList(false);
     }
-  }, [address]);
+  }, [authorId]);
 
   const loadPublishOverview = useCallback(async () => {
-    if (!address) return;
+    if (!authorId) return;
     setLoadingPublish(true);
     try {
       const res = await fetch(
-        `/api/v1/novel-publish?authorId=${encodeURIComponent(address)}`,
-        { headers: { "x-wallet-address": address } },
+        `/api/v1/novel-publish?authorId=${encodeURIComponent(authorId)}`,
+        { headers: { "x-wallet-address": authorId } },
       );
       const data = await readApiJsonSafe<{
         items?: {
@@ -436,16 +472,41 @@ export function AuthorDashboard() {
     } finally {
       setLoadingPublish(false);
     }
-  }, [address]);
+  }, [authorId]);
+
+  const loadArticleUvStats = useCallback(async () => {
+    if (!authorId) return;
+    const ids = publishRows
+      .map((r) => (r.record?.articleId ?? "").trim().toLowerCase())
+      .filter((id) => /^art_[0-9a-f]{10}$/.test(id));
+    if (ids.length === 0) {
+      setArticleUvByArticleId({});
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/v1/analytics/article-uv-summary?articleIds=${encodeURIComponent(ids.join(","))}`,
+        { headers: { "x-wallet-address": authorId } },
+      );
+      const data = await readApiJsonSafe<{
+        byArticleId?: Record<string, ArticleUvStats>;
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error ?? "加载失败");
+      setArticleUvByArticleId(data.byArticleId ?? {});
+    } catch {
+      setArticleUvByArticleId({});
+    }
+  }, [authorId, publishRows]);
 
   const loadTranslationPreferences = useCallback(async () => {
-    if (!address) return;
+    if (!authorId) return;
     setPrefsLoading(true);
     try {
       const res = await fetch(
-        `/api/v1/novel-translation/preferences?authorId=${encodeURIComponent(address)}`,
+        `/api/v1/novel-translation/preferences?authorId=${encodeURIComponent(authorId)}`,
         {
-          headers: { "x-wallet-address": address },
+          headers: { "x-wallet-address": authorId },
         },
       );
       const data = await readApiJsonSafe<{
@@ -470,18 +531,18 @@ export function AuthorDashboard() {
     } finally {
       setPrefsLoading(false);
     }
-  }, [address]);
+  }, [authorId]);
 
   const loadTranslationSources = useCallback(
     async (novelId: string) => {
-      if (!address || !novelId) return;
+      if (!authorId || !novelId) return;
       setTranslationLoadingSources(true);
       setTranslationError(null);
       try {
         const res = await fetch(
-          `/api/v1/novel-translation/sources?authorId=${encodeURIComponent(address)}&novelId=${encodeURIComponent(novelId)}`,
+          `/api/v1/novel-translation/sources?authorId=${encodeURIComponent(authorId)}&novelId=${encodeURIComponent(novelId)}`,
           {
-            headers: { "x-wallet-address": address },
+            headers: { "x-wallet-address": authorId },
           },
         );
         const data = await readApiJsonSafe<{
@@ -491,29 +552,47 @@ export function AuthorDashboard() {
             preview: string;
             isPublished: boolean;
             hasEnglishTranslation?: boolean;
+            translatedLangs?: string[];
           }>;
           hasDraft?: boolean;
+          novelTranslatedLanguages?: string[];
           error?: string;
         }>(res);
         if (!res.ok) throw new Error(data.error ?? "加载章节失败");
         const chapters = (data.chapters ?? []).map((x) => ({
           ...x,
           hasEnglishTranslation: x.hasEnglishTranslation === true,
+          translatedLangs: Array.isArray(x.translatedLangs) ? x.translatedLangs : [],
         }));
+        const unionFromChapters = [...new Set(chapters.flatMap((c) => c.translatedLangs))].sort();
+        setNovelTranslatedLanguages(
+          Array.isArray(data.novelTranslatedLanguages) &&
+            data.novelTranslatedLanguages.length > 0
+            ? [...data.novelTranslatedLanguages].sort()
+            : unionFromChapters,
+        );
         setTranslationChapters(chapters);
         setTranslationHasDraft(Boolean(data.hasDraft));
         const first = chapters[0];
         setTranslationChapterId((prev) => prev || first?.id || "");
         if (first?.preview) setTranslationSourcePreview(first.preview);
+        const firstWith = chapters.find((c) => c.translatedLangs.length > 0);
+        setTranslationPreviewChapterId(firstWith?.id ?? first?.id ?? "");
+        setTranslationPreviewLang(firstWith?.translatedLangs[0] ?? "");
       } catch (e) {
         setTranslationChapters([]);
         setTranslationHasDraft(false);
+        setNovelTranslatedLanguages([]);
+        setTranslationPreviewChapterId("");
+        setTranslationPreviewLang("");
+        setTranslationPreviewText("");
+        setTranslationPreviewUpdatedAt(null);
         setTranslationError(e instanceof Error ? e.message : "加载章节失败");
       } finally {
         setTranslationLoadingSources(false);
       }
     },
-    [address],
+    [authorId],
   );
 
   const loadAnalytics = useCallback(async () => {
@@ -540,12 +619,12 @@ export function AuthorDashboard() {
   }, [analyticsRange]);
 
   const loadTickets = useCallback(async () => {
-    if (!address) return;
+    if (!authorId) return;
     setTicketsLoading(true);
     setTicketsError(null);
     try {
       const res = await fetch("/api/v1/tickets", {
-        headers: { "x-wallet-address": address },
+        headers: { "x-wallet-address": authorId },
       });
       const data = await readApiJsonSafe<{
         items?: TicketItem[];
@@ -562,17 +641,98 @@ export function AuthorDashboard() {
     } finally {
       setTicketsLoading(false);
     }
-  }, [address]);
+  }, [authorId]);
+
+  const loadVipMembers = useCallback(async () => {
+    if (!authorId) return;
+    setVipLoading(true);
+    setVipError(null);
+    try {
+      const res = await fetch("/api/v1/admin/members", {
+        headers: { "x-wallet-address": authorId },
+        cache: "no-store",
+      });
+      const data = await readApiJsonSafe<{
+        isAdmin?: boolean;
+        items?: VipMemberRow[];
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error ?? "加载会员列表失败");
+      setVipAdmin(data.isAdmin === true);
+      setVipMembers(Array.isArray(data.items) ? data.items : []);
+    } catch (e) {
+      setVipMembers([]);
+      setVipAdmin(false);
+      setVipError(e instanceof Error ? e.message : "加载会员列表失败");
+    } finally {
+      setVipLoading(false);
+    }
+  }, [authorId]);
+
+  const handleVipGrant = useCallback(async () => {
+    if (!authorId || !vipGrantWallet.trim()) return;
+    setVipSubmitting(true);
+    setVipError(null);
+    try {
+      const res = await fetch("/api/v1/admin/members", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-wallet-address": authorId,
+        },
+        body: JSON.stringify({
+          action: "grant",
+          wallet: vipGrantWallet.trim(),
+          extendDays: vipGrantDays,
+        }),
+      });
+      const data = await readApiJsonSafe<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok) throw new Error(data.error ?? "操作失败");
+      setVipGrantWallet("");
+      await loadVipMembers();
+    } catch (e) {
+      setVipError(e instanceof Error ? e.message : "操作失败");
+    } finally {
+      setVipSubmitting(false);
+    }
+  }, [authorId, vipGrantWallet, vipGrantDays, loadVipMembers]);
+
+  const handleVipRevoke = useCallback(
+    async (wallet: string) => {
+      if (!authorId) return;
+      if (!window.confirm(`确定撤销该地址的 VIP？\n${wallet}`)) return;
+      setVipSubmitting(true);
+      setVipError(null);
+      try {
+        const res = await fetch("/api/v1/admin/members", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-wallet-address": authorId,
+          },
+          body: JSON.stringify({ action: "revoke", wallet }),
+        });
+        const data = await readApiJsonSafe<{ ok?: boolean; error?: string }>(res);
+        if (!res.ok) throw new Error(data.error ?? "操作失败");
+        await loadVipMembers();
+      } catch (e) {
+        setVipError(e instanceof Error ? e.message : "操作失败");
+      } finally {
+        setVipSubmitting(false);
+      }
+    },
+    [authorId, loadVipMembers],
+  );
 
   const loadAudiobooks = useCallback(async () => {
-    if (!address) return;
+    if (!authorId) return;
     setAudiobooksLoading(true);
     setAudiobooksError(null);
     try {
       const res = await fetch(
-        `/api/v1/audiobooks?authorId=${encodeURIComponent(address)}`,
+        `/api/v1/audiobooks?authorId=${encodeURIComponent(authorId)}`,
         {
-          headers: { "x-wallet-address": address },
+          headers: { "x-wallet-address": authorId },
           cache: "no-store",
         },
       );
@@ -588,15 +748,15 @@ export function AuthorDashboard() {
     } finally {
       setAudiobooksLoading(false);
     }
-  }, [address]);
+  }, [authorId]);
 
   const loadVideoExtracts = useCallback(async () => {
-    if (!address) return;
+    if (!authorId) return;
     setVideoExtractLoading(true);
     setVideoExtractError(null);
     try {
       const res = await fetch("/api/v1/video/extract", {
-        headers: { "x-wallet-address": address },
+        headers: { "x-wallet-address": authorId },
         cache: "no-store",
       });
       const data = await readApiJsonSafe<{
@@ -611,16 +771,16 @@ export function AuthorDashboard() {
     } finally {
       setVideoExtractLoading(false);
     }
-  }, [address]);
+  }, [authorId]);
 
   const loadVideoAssocChapters = useCallback(
     async (novelId: string) => {
-      if (!address || !novelId) return;
+      if (!authorId || !novelId) return;
       setVideoAssocChaptersLoading(true);
       try {
         const res = await fetch(
-          `/api/v1/novel-translation/sources?authorId=${encodeURIComponent(address)}&novelId=${encodeURIComponent(novelId)}`,
-          { headers: { "x-wallet-address": address } },
+          `/api/v1/novel-translation/sources?authorId=${encodeURIComponent(authorId)}&novelId=${encodeURIComponent(novelId)}`,
+          { headers: { "x-wallet-address": authorId } },
         );
         const data = await readApiJsonSafe<{
           chapters?: Array<{ id: string; title: string }>;
@@ -643,27 +803,32 @@ export function AuthorDashboard() {
         setVideoAssocChaptersLoading(false);
       }
     },
-    [address],
+    [authorId],
   );
 
   useEffect(() => {
-    if (tab === "novels" && address) void loadNovels();
-  }, [tab, address, loadNovels]);
+    if (tab === "novels" && authorId) void loadNovels();
+  }, [tab, authorId, loadNovels]);
 
   useEffect(() => {
-    if (tab === "novels" && address) void loadAudiobooks();
-  }, [tab, address, loadAudiobooks]);
+    if (tab === "novels" && authorId) void loadAudiobooks();
+  }, [tab, authorId, loadAudiobooks]);
 
   useEffect(() => {
-    if ((tab === "publish" || tab === "translation" || tab === "video") && address) {
+    if ((tab === "publish" || tab === "translation" || tab === "video") && authorId) {
       void loadPublishOverview();
     }
-  }, [tab, address, loadPublishOverview]);
+  }, [tab, authorId, loadPublishOverview]);
 
   useEffect(() => {
-    if (tab !== "video" || !address) return;
+    if (tab !== "publish" || !authorId || loadingPublish) return;
+    void loadArticleUvStats();
+  }, [tab, authorId, loadingPublish, loadArticleUvStats]);
+
+  useEffect(() => {
+    if (tab !== "video" || !authorId) return;
     void loadVideoExtracts();
-  }, [tab, address, loadVideoExtracts]);
+  }, [tab, authorId, loadVideoExtracts]);
 
   useEffect(() => {
     if (tab !== "video") return;
@@ -693,9 +858,29 @@ export function AuthorDashboard() {
   }, [tab, loadTickets]);
 
   useEffect(() => {
-    if (!address) return;
+    if (!authorId) {
+      setVipAdmin(null);
+      setVipMembers([]);
+      return;
+    }
+    void loadVipMembers();
+  }, [authorId, loadVipMembers]);
+
+  useEffect(() => {
+    if (tab !== "adminMembers") return;
+    void loadVipMembers();
+  }, [tab, loadVipMembers]);
+
+  useEffect(() => {
+    if (vipAdmin === false && tab === "adminMembers") {
+      setTab("novels");
+    }
+  }, [vipAdmin, tab]);
+
+  useEffect(() => {
+    if (!authorId) return;
     void loadTranslationPreferences();
-  }, [address, loadTranslationPreferences]);
+  }, [authorId, loadTranslationPreferences]);
 
   useEffect(() => {
     if (publishRows.length === 0) return;
@@ -707,9 +892,83 @@ export function AuthorDashboard() {
   }, [publishRows, translationNovelId]);
 
   useEffect(() => {
-    if (!translationNovelId) return;
+    if (!translationNovelId) {
+      setTranslationChapters([]);
+      setTranslationHasDraft(false);
+      setNovelTranslatedLanguages([]);
+      setTranslationPreviewChapterId("");
+      setTranslationPreviewLang("");
+      setTranslationPreviewText("");
+      setTranslationPreviewUpdatedAt(null);
+      setTranslationPreviewError(null);
+      return;
+    }
     void loadTranslationSources(translationNovelId);
   }, [translationNovelId, loadTranslationSources]);
+
+  useEffect(() => {
+    if (!authorId || !translationNovelId || !translationPreviewChapterId || !translationPreviewLang) {
+      setTranslationPreviewText("");
+      setTranslationPreviewUpdatedAt(null);
+      setTranslationPreviewLoading(false);
+      setTranslationPreviewError(null);
+      return;
+    }
+    const ac = new AbortController();
+    setTranslationPreviewLoading(true);
+    setTranslationPreviewError(null);
+    void (async () => {
+      try {
+        const qs = new URLSearchParams({
+          authorId: authorId,
+          novelId: translationNovelId,
+          chapterId: translationPreviewChapterId,
+          lang: translationPreviewLang,
+        });
+        const res = await fetch(`/api/v1/novel-translation/chapter-preview?${qs}`, {
+          headers: { "x-wallet-address": authorId },
+          signal: ac.signal,
+        });
+        const data = await readApiJsonSafe<{
+          translatedText?: string;
+          updatedAt?: string | null;
+          error?: string;
+        }>(res);
+        if (!res.ok) throw new Error(data.error ?? "加载预览失败");
+        setTranslationPreviewText(
+          typeof data.translatedText === "string" ? data.translatedText : "",
+        );
+        setTranslationPreviewUpdatedAt(
+          typeof data.updatedAt === "string" ? data.updatedAt : null,
+        );
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") return;
+        setTranslationPreviewText("");
+        setTranslationPreviewUpdatedAt(null);
+        setTranslationPreviewError(e instanceof Error ? e.message : "加载预览失败");
+      } finally {
+        if (!ac.signal.aborted) setTranslationPreviewLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [authorId, translationNovelId, translationPreviewChapterId, translationPreviewLang]);
+
+  useEffect(() => {
+    if (!translationPreviewChapterId || translationChapters.length === 0) return;
+    const ch = translationChapters.find((c) => c.id === translationPreviewChapterId);
+    const langs = ch?.translatedLangs ?? [];
+    if (langs.length === 0) {
+      if (translationPreviewLang) setTranslationPreviewLang("");
+      return;
+    }
+    if (!langs.includes(translationPreviewLang)) {
+      setTranslationPreviewLang(langs[0] ?? "");
+    }
+  }, [
+    translationPreviewChapterId,
+    translationChapters,
+    translationPreviewLang,
+  ]);
 
   useEffect(() => {
     if (translationSourceMode === "manual") {
@@ -735,7 +994,7 @@ export function AuthorDashboard() {
   ]);
 
   const openModal = () => {
-    if (!address) return;
+    if (!authorId) return;
     setError(null);
     setTitle("");
     setDescription("");
@@ -775,7 +1034,7 @@ export function AuthorDashboard() {
   };
 
   const handleSaveEdit = async () => {
-    if (!address || !editingNovelId) return;
+    if (!authorId || !editingNovelId) return;
     const t = editTitle.trim();
     if (!t) {
       setEditError("请填写小说标题");
@@ -788,10 +1047,10 @@ export function AuthorDashboard() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({
-          authorId: address,
+          authorId: authorId,
           novelId: editingNovelId,
           title: t,
           description: editDescription.trim(),
@@ -816,7 +1075,7 @@ export function AuthorDashboard() {
   };
 
   const handleSaveAudiobookEdit = async () => {
-    if (!address || !editingAudiobookId) return;
+    if (!authorId || !editingAudiobookId) return;
     const title = audiobookEditTitle.trim();
     if (!title) {
       setAudiobookEditError("请填写有声书标题");
@@ -829,10 +1088,10 @@ export function AuthorDashboard() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({
-          authorId: address,
+          authorId: authorId,
           id: editingAudiobookId,
           title,
           synopsis: audiobookEditSynopsis,
@@ -851,7 +1110,7 @@ export function AuthorDashboard() {
   };
 
   const handleCreate = async () => {
-    if (!address) return;
+    if (!authorId) return;
     const t = title.trim();
     if (!t) {
       setError("请填写小说标题");
@@ -864,10 +1123,10 @@ export function AuthorDashboard() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({
-          authorId: address,
+          authorId: authorId,
           title: t,
           description: description.trim(),
         }),
@@ -932,7 +1191,7 @@ export function AuthorDashboard() {
 
   const handleNovelTxtBatchSelected = useCallback(
     async (files: FileList | null) => {
-      if (!address || !files || files.length === 0) return;
+      if (!authorId || !files || files.length === 0) return;
       const all = Array.from(files);
       const txtList = all.filter((f) => f.name.toLowerCase().endsWith(".txt"));
       const skipped = all.length - txtList.length;
@@ -960,7 +1219,7 @@ export function AuthorDashboard() {
       for (let i = 0; i < txtList.length; i += 1) {
         const file = txtList[i]!;
         try {
-          await runSingleTxtImport(file, address);
+          await runSingleTxtImport(file, authorId);
         } catch (e) {
           failures.push({
             name: file.name,
@@ -988,13 +1247,13 @@ export function AuthorDashboard() {
         );
       }
     },
-    [address, loadNovels, runSingleTxtImport],
+    [authorId, loadNovels, runSingleTxtImport],
   );
 
   const handleVideoMp4Selected = useCallback(
     async (files: FileList | null) => {
       const f = files?.[0];
-      if (!f || !address) return;
+      if (!f || !authorId) return;
       setVideoExtractUploading(true);
       setVideoExtractUploadError(null);
       try {
@@ -1002,14 +1261,21 @@ export function AuthorDashboard() {
         fd.append("file", f);
         const res = await fetch("/api/v1/video/extract", {
           method: "POST",
-          headers: { "x-wallet-address": address },
+          headers: { "x-wallet-address": authorId },
           body: fd,
         });
         const data = await readApiJsonSafe<{
           item?: VideoExtractListItem;
           error?: string;
         }>(res);
-        if (!res.ok) throw new Error(data.error ?? "上传失败");
+        if (!res.ok) {
+          if (res.status === 408) {
+            throw new Error(
+              "请求超时（408）：上传慢或转码较久时，请在 Nginx 调高 client_body_timeout、proxy_read_timeout（建议 ≥600s）；或换较小文件再试。",
+            );
+          }
+          throw new Error(data.error ?? `上传失败（HTTP ${res.status}）`);
+        }
         if (data.item) setVideoExtractItems((prev) => [data.item!, ...prev]);
       } catch (e) {
         setVideoExtractUploadError(e instanceof Error ? e.message : "上传失败");
@@ -1017,12 +1283,12 @@ export function AuthorDashboard() {
         setVideoExtractUploading(false);
       }
     },
-    [address],
+    [authorId],
   );
 
   const linkExtractToChapter = useCallback(
     async (mp3Url: string, extractId: string) => {
-      if (!address || !videoAssocNovelId || !videoAssocChapterId) {
+      if (!authorId || !videoAssocNovelId || !videoAssocChapterId) {
         window.alert("请先选择小说与章节");
         return;
       }
@@ -1033,11 +1299,11 @@ export function AuthorDashboard() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-wallet-address": address,
+            "x-wallet-address": authorId,
           },
           body: JSON.stringify({
             action: "set_chapter_narration_audio",
-            authorId: address,
+            authorId: authorId,
             novelId: videoAssocNovelId,
             chapterId: videoAssocChapterId,
             audioUrl: mp3Url,
@@ -1052,12 +1318,12 @@ export function AuthorDashboard() {
         setVideoAssocLinkingId(null);
       }
     },
-    [address, videoAssocNovelId, videoAssocChapterId],
+    [authorId, videoAssocNovelId, videoAssocChapterId],
   );
 
   const transcribeVideoExtract = useCallback(
     async (extractId: string) => {
-      if (!address) return;
+      if (!authorId) return;
       setVideoTranscribingId(extractId);
       setVideoTranscribeErrorById((prev) => {
         const next = { ...prev };
@@ -1069,7 +1335,7 @@ export function AuthorDashboard() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-wallet-address": address,
+            "x-wallet-address": authorId,
           },
           body: JSON.stringify({ extractId }),
         });
@@ -1086,12 +1352,12 @@ export function AuthorDashboard() {
         setVideoTranscribingId(null);
       }
     },
-    [address],
+    [authorId],
   );
 
   const deleteVideoExtract = useCallback(
     async (extractId: string) => {
-      if (!address) return;
+      if (!authorId) return;
       if (
         !window.confirm(
           "确定删除这条 MP3 吗？将移除工作台记录并删除服务器上的音频文件；若已关联到某章节，读者端「朗读」可能失效，需重新上传或关联。",
@@ -1105,7 +1371,7 @@ export function AuthorDashboard() {
           `/api/v1/video/extract?extractId=${encodeURIComponent(extractId)}`,
           {
             method: "DELETE",
-            headers: { "x-wallet-address": address },
+            headers: { "x-wallet-address": authorId },
           },
         );
         const data = await readApiJsonSafe<{ error?: string }>(res);
@@ -1132,7 +1398,7 @@ export function AuthorDashboard() {
         setVideoExtractDeletingId(null);
       }
     },
-    [address],
+    [authorId],
   );
 
   const openShareModal = (row: {
@@ -1157,7 +1423,7 @@ export function AuthorDashboard() {
   };
 
   const openLeadVideoModal = async (row: PublishRow) => {
-    if (!address) return;
+    if (!authorId) return;
     setLeadVideoTarget({ novelId: row.novelId, novelTitle: row.novelTitle });
     setLeadVideoOpen(true);
     setVideoMaterial("clean-carpet");
@@ -1176,10 +1442,10 @@ export function AuthorDashboard() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({
-          authorId: address,
+          authorId: authorId,
           novelId: row.novelId,
         }),
       });
@@ -1272,7 +1538,7 @@ export function AuthorDashboard() {
   };
 
   const handleSaveTranslationPreferences = async () => {
-    if (!address) return;
+    if (!authorId) return;
     setSavingPrefs(true);
     setPrefsMessage(null);
     try {
@@ -1280,10 +1546,10 @@ export function AuthorDashboard() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({
-          authorId: address,
+          authorId: authorId,
           preferredLanguages: preferredTranslationLanguages,
           defaultTargetLanguage: defaultTranslationLanguage,
         }),
@@ -1311,7 +1577,7 @@ export function AuthorDashboard() {
   };
 
   const handleRunTranslation = async () => {
-    if (!address || !translationNovelId || translationRunning) return;
+    if (!authorId || !translationNovelId || translationRunning) return;
     if (translationSourceMode === "chapter" && !translationChapterId) {
       setTranslationError("请选择章节后再翻译");
       return;
@@ -1339,10 +1605,10 @@ export function AuthorDashboard() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({
-          authorId: address,
+          authorId: authorId,
           novelId: translationNovelId,
           sourceType: translationSourceMode,
           chapterId: translationSourceMode === "chapter" ? translationChapterId : undefined,
@@ -1461,14 +1727,14 @@ export function AuthorDashboard() {
   }, [ticketImages]);
 
   const uploadTicketImages = useCallback(async (): Promise<string[]> => {
-    if (!address) return [];
+    if (!authorId) return [];
     if (ticketImages.length === 0) return [];
     const form = new FormData();
     for (const f of ticketImages) form.append("files", f);
     const res = await fetch("/api/v1/image-host", {
       method: "POST",
       headers: {
-        "x-wallet-address": address,
+        "x-wallet-address": authorId,
       },
       body: form,
     });
@@ -1481,10 +1747,10 @@ export function AuthorDashboard() {
       .map((x) => (typeof x.url === "string" ? x.url : ""))
       .filter(Boolean)
       .slice(0, 8);
-  }, [address, ticketImages]);
+  }, [authorId, ticketImages]);
 
   const handleCreateTicket = async () => {
-    if (!address || ticketSubmitting) return;
+    if (!authorId || ticketSubmitting) return;
     const title = ticketTitle.trim();
     const content = ticketContent.trim();
     if (!title) {
@@ -1505,7 +1771,7 @@ export function AuthorDashboard() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({ title, content, imageUrls }),
       });
@@ -1526,7 +1792,7 @@ export function AuthorDashboard() {
 
   const handleUploadAudiobookFiles = useCallback(
     async (list: FileList | null) => {
-      if (!address || !list || list.length === 0 || audioUploading) return;
+      if (!authorId || !list || list.length === 0 || audioUploading) return;
       const files = Array.from(list);
       const allowedExt = new Set(["mp3", "wav", "m4a", "aac", "ogg", "flac"]);
       const invalid = files.find((f) => {
@@ -1546,7 +1812,7 @@ export function AuthorDashboard() {
       try {
         const uploadOnce = async (url: string) => {
           const form = new FormData();
-          form.append("authorId", address);
+          form.append("authorId", authorId);
           form.append("novelId", audiobookNovelId);
           for (const f of files) {
             form.append("files", f);
@@ -1556,7 +1822,7 @@ export function AuthorDashboard() {
               const xhr = new XMLHttpRequest();
               audioUploadXhrRef.current = xhr;
               xhr.open("POST", url);
-              xhr.setRequestHeader("x-wallet-address", address);
+              xhr.setRequestHeader("x-wallet-address", authorId);
               xhr.upload.onprogress = (event) => {
                 if (!event.lengthComputable || event.total <= 0) return;
                 const percent = Math.min(
@@ -1641,7 +1907,7 @@ export function AuthorDashboard() {
         setAudioUploading(false);
       }
     },
-    [address, audioUploading, audiobookNovelId, loadAudiobooks],
+    [authorId, audioUploading, audiobookNovelId, loadAudiobooks],
   );
 
   const handleCancelAudiobookUpload = useCallback(() => {
@@ -1658,14 +1924,14 @@ export function AuthorDashboard() {
     ticketId: string,
     status: TicketItem["status"],
   ) => {
-    if (!address || !ticketIsAdmin) return;
+    if (!authorId || !ticketIsAdmin) return;
     setTicketsError(null);
     try {
       const res = await fetch(`/api/v1/tickets/${encodeURIComponent(ticketId)}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          "x-wallet-address": address,
+          "x-wallet-address": authorId,
         },
         body: JSON.stringify({ status }),
       });
@@ -1774,45 +2040,34 @@ export function AuthorDashboard() {
     };
   }, [shareOpen, sharePayload]);
 
-  if (!isConnected || !address) {
-    const busy =
-      status === "reconnecting" ||
-      status === "connecting" ||
-      isConnectPending;
-
-    if (busy) {
-      return (
-        <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[var(--background)] px-4 text-neutral-800 dark:text-neutral-100">
-          <p className="text-sm font-medium">{t("workspace.connectingTitle")}</p>
-          <p className="text-center text-xs text-neutral-500 dark:text-neutral-400">
-            {t("workspace.connectingHint")}
-          </p>
-        </div>
-      );
-    }
-
+  if (!sessionResolved) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[var(--background)] px-4 text-center text-neutral-800 dark:text-neutral-100">
-        <p className="max-w-md text-sm font-medium">{t("workspace.gateTitle")}</p>
-        <p className="max-w-md text-xs text-neutral-500 dark:text-neutral-400">
-          {t("workspace.gateHint")}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[var(--background)] px-4 text-neutral-800 dark:text-neutral-100">
+        <p className="text-sm font-medium">{t("workspace.sessionLoading")}</p>
+      </div>
+    );
+  }
+
+  const walletBusy =
+    status === "reconnecting" ||
+    status === "connecting" ||
+    isConnectPending;
+
+  if (walletBusy && !authorId) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[var(--background)] px-4 text-neutral-800 dark:text-neutral-100">
+        <p className="text-sm font-medium">{t("workspace.connectingTitle")}</p>
+        <p className="text-center text-xs text-neutral-500 dark:text-neutral-400">
+          {t("workspace.connectingHint")}
         </p>
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          <button
-            type="button"
-            onClick={() => void requestConnect()}
-            disabled={isConnectPending}
-            className="cursor-pointer rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
-          >
-            {t("workspace.connectWallet")}
-          </button>
-          <Link
-            href="/"
-            className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium dark:border-neutral-600"
-          >
-            {t("workspace.backHome")}
-          </Link>
-        </div>
+      </div>
+    );
+  }
+
+  if (!authorId) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--background)] px-4 py-10 text-neutral-800 dark:text-neutral-100">
+        <WorkspaceAuthGate />
       </div>
     );
   }
@@ -1898,6 +2153,19 @@ export function AuthorDashboard() {
           >
             {t("workspace.tabTickets")}
           </button>
+          {vipAdmin === true ? (
+            <button
+              type="button"
+              onClick={() => setTab("adminMembers")}
+              className={
+                tab === "adminMembers"
+                  ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
+                  : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
+              }
+            >
+              {t("workspace.tabAdminMembers")}
+            </button>
+          ) : null}
         </nav>
       </header>
 
@@ -2156,7 +2424,8 @@ export function AuthorDashboard() {
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">发布管理</h2>
             <p className="max-w-xl text-sm text-neutral-600 dark:text-neutral-400">
-              查看每部作品的读者可见状态。详细配置与撤回请在对应作品的编辑器大纲区操作。
+              查看每部作品的读者可见状态。详细配置与撤回请在对应作品的编辑器大纲区操作。下方「阅读
+              UV」按上海时区的自然日、对访问 IP 做哈希后去重：同一 IP 同一天对同一作品最多计 1；跨日再访问会再计。
             </p>
             <div className="overflow-hidden rounded-xl border border-[#1e2a3f] bg-[#121a29]">
               {loadingPublish ? (
@@ -2175,6 +2444,9 @@ export function AuthorDashboard() {
                     const ts = row.record?.publishedAt
                       ? formatModified(row.record.publishedAt, locale)
                       : "—";
+                    const aidNorm = (row.record?.articleId ?? "").trim().toLowerCase();
+                    const uv =
+                      /^art_[0-9a-f]{10}$/.test(aidNorm) ? articleUvByArticleId[aidNorm] : undefined;
                     return (
                       <li
                         key={row.novelId}
@@ -2187,6 +2459,12 @@ export function AuthorDashboard() {
                           <p className="text-[11px] text-zinc-500">
                             最后配置 {ts}
                           </p>
+                          {uv ? (
+                            <p className="mt-0.5 text-[10px] text-zinc-600">
+                              阅读 UV：今日 {uv.today} · 近 7 日去重 {uv.uv7} · 近 30 日去重{" "}
+                              {uv.uv30}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-[#4fc3f7]/40 bg-[#0a0e17] px-2.5 py-0.5 text-[11px] font-medium text-[#4fc3f7]">
@@ -2476,7 +2754,7 @@ export function AuthorDashboard() {
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">多语言翻译</h2>
             <p className="max-w-2xl text-sm text-neutral-600 dark:text-neutral-400">
-              关联发布管理数据，可直接对发布章节或草稿进行翻译。支持手动触发、多语言目标选择，以及翻译后在线预览与编辑。
+              关联发布管理数据，可直接对发布章节或草稿进行翻译。支持手动触发、多语言目标选择、翻译后在线预览与编辑，以及下方「已译稿一览」按章节切换语种查看已落盘译文。
             </p>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-4 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
@@ -2559,7 +2837,9 @@ export function AuthorDashboard() {
                         <option key={chapter.id} value={chapter.id}>
                           {chapter.title}
                           {chapter.isPublished ? "（已发布）" : "（草稿章节）"}
-                          {chapter.hasEnglishTranslation ? " · 已有英文翻译" : ""}
+                          {chapter.translatedLangs.length > 0
+                            ? ` · 译 ${chapter.translatedLangs.map((l) => l.toUpperCase()).join(" ")}`
+                            : ""}
                         </option>
                       ))}
                     </select>
@@ -2582,22 +2862,35 @@ export function AuthorDashboard() {
                             >
                               {chapter.title}
                             </button>
-                            {chapter.hasEnglishTranslation ? (
-                              <div className="flex shrink-0 items-center gap-1.5">
-                                <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300">
-                                  EN
-                                </span>
-                                {translationCompareArticleId ? (
-                                  <a
-                                    href={`/library/${encodeURIComponent(translationCompareArticleId)}?lang=en`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="rounded border border-cyan-500/40 px-1.5 py-0.5 text-[10px] text-cyan-300 hover:bg-cyan-500/10"
-                                    title="打开英文阅读页（可与原文页对比）"
-                                  >
-                                    对比入口
-                                  </a>
-                                ) : null}
+                            {chapter.translatedLangs.length > 0 ? (
+                              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                                {chapter.translatedLangs.map((lang) => (
+                                  <span key={lang} className="flex items-center gap-0.5">
+                                    <button
+                                      type="button"
+                                      title={`预览 ${lang.toUpperCase()} 译文`}
+                                      onClick={() => {
+                                        setTranslationChapterId(chapter.id);
+                                        setTranslationPreviewChapterId(chapter.id);
+                                        setTranslationPreviewLang(lang);
+                                      }}
+                                      className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-emerald-300 hover:bg-emerald-500/20"
+                                    >
+                                      {lang}
+                                    </button>
+                                    {translationCompareArticleId ? (
+                                      <a
+                                        href={`/library/${encodeURIComponent(translationCompareArticleId)}?lang=${encodeURIComponent(lang)}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded border border-cyan-500/40 px-1 py-0.5 text-[9px] text-cyan-300 hover:bg-cyan-500/10"
+                                        title="读者书库该语种"
+                                      >
+                                        读
+                                      </a>
+                                    ) : null}
+                                  </span>
+                                ))}
                               </div>
                             ) : null}
                           </div>
@@ -2606,16 +2899,16 @@ export function AuthorDashboard() {
                     ) : null}
                     {translationCompareArticleId ? (
                       <p className="mt-1 text-[11px] text-zinc-500">
-                        对比建议：打开原文
+                        对照阅读：打开
                         <a
                           href={`/library/${encodeURIComponent(translationCompareArticleId)}`}
                           target="_blank"
                           rel="noreferrer"
                           className="mx-1 text-cyan-400 underline"
                         >
-                          中文页
+                          原文页
                         </a>
-                        与英文页进行对照阅读。
+                        ，再点上表各语种的「读」打开对应翻译页。
                       </p>
                     ) : null}
                   </div>
@@ -2721,6 +3014,168 @@ export function AuthorDashboard() {
                   </p>
                 ) : null}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
+              <h3 className="text-sm font-semibold text-zinc-100">已译稿一览 / 按章节预览</h3>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                展示翻译存储中已有落盘译文的章节与语种；选择章节与语种后加载正文预览（与上方「手动触发翻译」独立）。
+              </p>
+              {!translationNovelId ? (
+                <p className="mt-3 text-xs text-zinc-500">请先选择小说。</p>
+              ) : novelTranslatedLanguages.length === 0 ? (
+                <p className="mt-3 text-xs text-zinc-500">
+                  当前小说暂无已保存的多语译文；完成翻译并写入存储后会出现在此。
+                </p>
+              ) : (
+                <>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <span className="text-[11px] text-zinc-500">全书语种：</span>
+                    {novelTranslatedLanguages.map((code) => (
+                      <span
+                        key={code}
+                        className="rounded border border-indigo-500/40 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-medium uppercase text-indigo-200"
+                      >
+                        {translationLangLabel(code, locale)}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-3 overflow-x-auto rounded-lg border border-[#324866]">
+                    <table className="w-full min-w-[320px] text-left text-[11px] text-zinc-300">
+                      <thead className="border-b border-[#324866] bg-[#0d1625] text-zinc-500">
+                        <tr>
+                          <th className="px-2 py-2 font-medium">章节</th>
+                          <th className="px-2 py-2 font-medium">已有译文</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {translationChapters.map((chapter) => (
+                          <tr
+                            key={chapter.id}
+                            className="border-b border-[#243652] last:border-0 hover:bg-[#0d1625]/80"
+                          >
+                            <td className="max-w-[200px] truncate px-2 py-1.5" title={chapter.title}>
+                              {chapter.title}
+                            </td>
+                            <td className="px-2 py-1.5">
+                              {chapter.translatedLangs.length === 0 ? (
+                                <span className="text-zinc-600">—</span>
+                              ) : (
+                                <div className="flex flex-wrap gap-1">
+                                  {chapter.translatedLangs.map((lang) => (
+                                    <button
+                                      key={lang}
+                                      type="button"
+                                      onClick={() => {
+                                        setTranslationPreviewChapterId(chapter.id);
+                                        setTranslationPreviewLang(lang);
+                                      }}
+                                      className={
+                                        chapter.id === translationPreviewChapterId &&
+                                        lang === translationPreviewLang
+                                          ? "rounded border border-amber-400/70 bg-amber-500/20 px-1.5 py-0.5 font-medium uppercase text-amber-100"
+                                          : "rounded border border-zinc-600 bg-[#0d1625] px-1.5 py-0.5 font-medium uppercase text-zinc-300 hover:border-cyan-500/50 hover:text-cyan-200"
+                                      }
+                                    >
+                                      {lang}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-zinc-400">
+                        预览章节
+                      </label>
+                      <select
+                        value={translationPreviewChapterId}
+                        onChange={(e) => setTranslationPreviewChapterId(e.target.value)}
+                        disabled={translationLoadingSources}
+                        className="w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                      >
+                        {translationChapters.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-zinc-400">
+                        预览语种
+                      </label>
+                      <select
+                        value={translationPreviewLang}
+                        onChange={(e) => setTranslationPreviewLang(e.target.value)}
+                        disabled={
+                          translationLoadingSources ||
+                          !(translationChapters.find(
+                            (c) => c.id === translationPreviewChapterId,
+                          )?.translatedLangs.length ?? 0)
+                        }
+                        className="w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                      >
+                        {(
+                          translationChapters.find(
+                            (c) => c.id === translationPreviewChapterId,
+                          )?.translatedLangs ?? []
+                        ).length === 0 ? (
+                          <option value="">（该章无已存译文）</option>
+                        ) : null}
+                        {(
+                          translationChapters.find(
+                            (c) => c.id === translationPreviewChapterId,
+                          )?.translatedLangs ?? []
+                        ).map((code) => (
+                          <option key={code} value={code}>
+                            {translationLangLabel(code, locale)} ({code})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  {translationPreviewError ? (
+                    <p className="mt-2 text-xs text-rose-400">{translationPreviewError}</p>
+                  ) : null}
+                  {translationPreviewLoading ? (
+                    <p className="mt-2 text-xs text-zinc-500">正在加载译文…</p>
+                  ) : null}
+                  <label className="mt-3 block text-xs font-medium text-zinc-400">
+                    译文正文（只读）
+                  </label>
+                  <textarea
+                    readOnly
+                    value={translationPreviewText}
+                    rows={12}
+                    className="mt-1 w-full resize-y rounded-lg border border-[#324866] bg-[#0b1420] px-3 py-2 font-mono text-xs leading-relaxed text-zinc-200"
+                    placeholder="选择章节与语种后自动加载"
+                  />
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-zinc-500">
+                    {translationPreviewUpdatedAt ? (
+                      <span>
+                        存储更新时间：
+                        {formatModified(translationPreviewUpdatedAt, locale)}
+                      </span>
+                    ) : null}
+                    {translationCompareArticleId && translationPreviewLang ? (
+                      <a
+                        href={`/library/${encodeURIComponent(translationCompareArticleId)}?lang=${encodeURIComponent(translationPreviewLang)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-cyan-400 underline hover:text-cyan-300"
+                      >
+                        在书库打开当前语种
+                      </a>
+                    ) : null}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -3034,6 +3489,112 @@ export function AuthorDashboard() {
                             </button>
                           </div>
                         ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
+          </div>
+        )}
+
+        {tab === "adminMembers" && vipAdmin === true && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">{t("workspace.tabAdminMembers")}</h2>
+            <p className="max-w-2xl text-sm text-neutral-600 dark:text-neutral-400">
+              仅当连接钱包为{" "}
+              <code className="rounded bg-neutral-200 px-1 text-xs dark:bg-neutral-800">ADMIN_ADDRESS</code>{" "}
+              时可见。授予会员将写入{" "}
+              <code className="rounded bg-neutral-200 px-1 text-xs dark:bg-neutral-800">.data/billing/members/</code>
+              ；续期从当前周期结束时间顺延；撤销将删除该地址的会员文件。
+            </p>
+            <div className="grid gap-4 md:grid-cols-2">
+              <section className="space-y-3 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
+                <h3 className="text-sm font-semibold text-zinc-100">授予 / 续期 VIP</h3>
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-400">作者钱包地址（0x…）</label>
+                  <input
+                    type="text"
+                    value={vipGrantWallet}
+                    onChange={(e) => setVipGrantWallet(e.target.value)}
+                    spellCheck={false}
+                    autoComplete="off"
+                    className="w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 font-mono text-sm text-zinc-100"
+                    placeholder="0x…"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-400">延长天数</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={3650}
+                    value={vipGrantDays}
+                    onChange={(e) => setVipGrantDays(Number(e.target.value) || 30)}
+                    className="w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleVipGrant()}
+                  disabled={vipSubmitting || !vipGrantWallet.trim()}
+                  className="rounded-lg border border-emerald-400/60 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {vipSubmitting ? "处理中…" : "确认授予 / 续期"}
+                </button>
+              </section>
+              <section className="space-y-3 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-zinc-100">会员列表</h3>
+                  <button
+                    type="button"
+                    onClick={() => void loadVipMembers()}
+                    disabled={vipLoading}
+                    className="rounded border border-[#324866] px-2.5 py-1 text-xs text-zinc-300 hover:bg-[#0d1625] disabled:opacity-50"
+                  >
+                    刷新
+                  </button>
+                </div>
+                {vipError ? (
+                  <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                    {vipError}
+                  </p>
+                ) : null}
+                {vipLoading ? (
+                  <p className="text-xs text-zinc-500">加载中…</p>
+                ) : vipMembers.length === 0 ? (
+                  <p className="text-xs text-zinc-500">暂无会员记录</p>
+                ) : (
+                  <ul className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                    {vipMembers.map((row) => (
+                      <li
+                        key={row.address}
+                        className="rounded-lg border border-[#2a3b57] bg-[#0f1726] p-3"
+                      >
+                        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                          <p className="break-all font-mono text-xs text-zinc-200">{row.address}</p>
+                          <span
+                            className={
+                              row.active
+                                ? "shrink-0 rounded-full border border-emerald-400/50 px-2 py-0.5 text-[11px] text-emerald-300"
+                                : "shrink-0 rounded-full border border-zinc-500/50 px-2 py-0.5 text-[11px] text-zinc-400"
+                            }
+                          >
+                            {row.active ? "当前有效" : "未生效 / 已过期"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-zinc-500">
+                          状态 {row.record.status} · 周期至{" "}
+                          {formatModified(row.record.currentPeriodEnd, locale)}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void handleVipRevoke(row.address)}
+                          disabled={vipSubmitting}
+                          className="mt-2 rounded border border-rose-500/40 px-2 py-0.5 text-[11px] text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+                        >
+                          撤销 VIP
+                        </button>
                       </li>
                     ))}
                   </ul>

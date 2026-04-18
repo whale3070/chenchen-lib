@@ -11,14 +11,16 @@ import {
   type ReactNode,
 } from "react";
 
+import { readCookieClient } from "@/lib/cookies-client";
+import { getEnglishSiteMessages, translateKey } from "@/i18n/site-messages";
 import {
   DEFAULT_SITE_LOCALE,
+  GEO_UI_LOCALE_COOKIE,
   isStaticUiLocale,
   normalizeUiLocale,
   SITE_LOCALE_STORAGE_KEY,
   SITE_UI_MT_CACHE_PREFIX,
 } from "@/lib/site-locale";
-import { getEnglishSiteMessages, translateKey } from "@/i18n/site-messages";
 
 type SiteLocaleContextValue = {
   locale: string;
@@ -30,16 +32,36 @@ type SiteLocaleContextValue = {
 
 const SiteLocaleContext = createContext<SiteLocaleContextValue | null>(null);
 
-export function SiteLocaleProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<string>(DEFAULT_SITE_LOCALE);
+function initialLocaleFromServerHint(hint: string | null | undefined): string {
+  const n = hint ? normalizeUiLocale(hint) : null;
+  return n ?? DEFAULT_SITE_LOCALE;
+}
+
+export function SiteLocaleProvider({
+  children,
+  initialLocaleHint,
+}: {
+  children: ReactNode;
+  /** From `cookies().get(GEO_UI_LOCALE_COOKIE)` — IP 推断语言，可被 localStorage 覆盖 */
+  initialLocaleHint?: string | null;
+}) {
+  const [locale, setLocaleState] = useState<string>(() =>
+    initialLocaleFromServerHint(initialLocaleHint),
+  );
   const [mtBundle, setMtBundle] = useState<Record<string, string> | null>(null);
   const [uiTranslating, setUiTranslating] = useState(false);
 
   useLayoutEffect(() => {
     try {
       const raw = window.localStorage.getItem(SITE_LOCALE_STORAGE_KEY);
-      const n = raw ? normalizeUiLocale(raw) : null;
-      if (n) setLocaleState(n);
+      const saved = raw ? normalizeUiLocale(raw) : null;
+      if (saved) {
+        setLocaleState(saved);
+        return;
+      }
+      const fromCookie = readCookieClient(GEO_UI_LOCALE_COOKIE);
+      const geo = fromCookie ? normalizeUiLocale(fromCookie) : null;
+      if (geo) setLocaleState(geo);
     } catch {
       /* ignore */
     }

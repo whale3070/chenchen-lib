@@ -7,7 +7,6 @@ import { useCallback, useMemo } from "react";
 import { FloatingReaderAiShell } from "@/components/floating-reader-ai-shell";
 import { ReaderAiRecommendPanel } from "@/components/reader-ai-recommend-panel";
 import { getLandingProgressTimeline } from "@/i18n/landing-progress";
-import { translateKey } from "@/i18n/site-messages";
 import { useSiteLocale } from "@/providers/site-locale-provider";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 
@@ -31,15 +30,10 @@ export function LandingGate() {
     isConnectPending,
   } = useWeb3Auth();
 
-  /** 未连接钱包时首页固定英文；连接后使用已保存界面语言（含斯道普/机翻结果）。 */
-  const tPage = useCallback(
-    (key: string) =>
-      isConnected ? t(key) : translateKey("en", key),
-    [isConnected, t],
-  );
+  /** 未手动指定语言时由 IP（middleware cookie）推断；已保存 localStorage 或斯道普选择优先。 */
+  const tPage = useCallback((key: string) => t(key), [t]);
 
-  const displayLocale = isConnected ? locale : "en";
-  /** 开发进度条与界面语言一致，未连接钱包时仍可读 localStorage 中的 zh-CN 等设置 */
+  const displayLocale = locale;
   const progressTimeline = getLandingProgressTimeline(locale);
 
   const aiStrings = useMemo(
@@ -116,9 +110,12 @@ export function LandingGate() {
             {tPage("landing.navGuide")}
           </Link>
         </nav>
-        <h1 className="mb-12 text-center text-2xl font-semibold tracking-tight text-white md:text-3xl">
+        <h1 className="mb-4 text-center text-2xl font-semibold tracking-tight text-white md:text-3xl">
           {tPage("landing.heroTitle")}
         </h1>
+        <p className="mx-auto mb-10 max-w-2xl text-center text-sm leading-relaxed text-zinc-400 md:text-base">
+          {tPage("landing.tagline")}
+        </p>
 
         <div className="grid w-full max-w-4xl grid-cols-1 gap-8 md:grid-cols-2 md:gap-10">
           <motion.div

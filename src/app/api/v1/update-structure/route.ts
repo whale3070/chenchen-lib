@@ -2,6 +2,7 @@ import { isAddress } from "viem";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 import type { PlotNode } from "@chenchen/shared/types";
@@ -84,7 +85,7 @@ async function readStructureNodes(authorId: string, docId: string): Promise<Plot
   const fp = await structurePath(authorId, docId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as StructurePayload;
+    const data = parseLeadingJsonValue(raw) as StructurePayload;
     return Array.isArray(data?.nodes) ? sanitizeStructureNodes(data.nodes) : null;
   } catch (e: unknown) {
     const code =
@@ -108,7 +109,7 @@ export async function GET(req: NextRequest) {
   const fp = await structurePath(authorId, docId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as StructurePayload;
+    const data = parseLeadingJsonValue(raw) as StructurePayload;
     if (!data || !Array.isArray(data.nodes)) {
       return NextResponse.json({ nodes: null, updatedAt: null });
     }

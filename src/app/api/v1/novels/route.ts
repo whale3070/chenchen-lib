@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { getDraftFilePath } from "@/lib/draft-path";
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { countTextForChineseWriting, stripHtmlForCount } from "@/lib/text-count";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -90,7 +91,7 @@ async function readDraftStats(
   const fp = getDraftFilePath(process.cwd(), authorLower, novelId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as { html?: string; updatedAt?: string };
+    const data = parseLeadingJsonValue(raw) as { html?: string; updatedAt?: string };
     const html = typeof data.html === "string" ? data.html : "";
     const text = stripHtmlForCount(html);
     const wordCount = countManuscriptChars(text);
@@ -114,7 +115,7 @@ async function readStructureStats(
   const fp = structurePath(authorLower, novelId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as {
+    const data = parseLeadingJsonValue(raw) as {
       updatedAt?: unknown;
       nodes?: Array<{
         kind?: unknown;
@@ -153,7 +154,7 @@ async function readAuthorIndex(authorId: string): Promise<AuthorNovelsIndex> {
   const fp = authorIndexPath(authorId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as AuthorNovelsIndex;
+    const data = parseLeadingJsonValue(raw) as AuthorNovelsIndex;
     if (data && Array.isArray(data.novels))
       return { authorId: safeAuthorId(authorId), novels: data.novels };
   } catch (e: unknown) {

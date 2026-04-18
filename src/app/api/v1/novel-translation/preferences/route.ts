@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -62,7 +63,7 @@ async function readPreferences(authorLower: string): Promise<TranslationPreferen
   const fp = preferencesPath(authorLower);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as Partial<TranslationPreferences>;
+    const data = parseLeadingJsonValue(raw) as Partial<TranslationPreferences>;
     const preferredLanguages = normalizeLangList(data.preferredLanguages);
     const defaultTargetLanguage =
       typeof data.defaultTargetLanguage === "string"

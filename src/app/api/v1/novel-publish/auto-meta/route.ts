@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { isAdminWallet, isPaidMemberActive } from "@/lib/server/paid-membership";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -197,7 +198,7 @@ export async function POST(req: NextRequest) {
   let workTitle = "";
   try {
     const raw = await fs.readFile(novelsIndexPath(authorLower), "utf8");
-    const data = JSON.parse(raw) as {
+    const data = parseLeadingJsonValue(raw) as {
       novels?: Array<{ id?: string; title?: string }>;
     };
     const found = data.novels?.find((n) => n.id === novelId);
@@ -209,7 +210,7 @@ export async function POST(req: NextRequest) {
   let sample = "";
   try {
     const raw = await fs.readFile(structurePath(authorLower, novelId), "utf8");
-    const structure = JSON.parse(raw) as StructurePayload;
+    const structure = parseLeadingJsonValue(raw) as StructurePayload;
     const chapters = (structure.nodes ?? []).filter((n) => n.kind === "chapter").slice(0, 4);
     sample = chapters
       .map((ch) => {

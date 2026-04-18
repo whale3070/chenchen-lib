@@ -10,6 +10,8 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.navPitch": "About Chenchen-Lib",
     "landing.navGuide": "Reader guide",
     "landing.heroTitle": "Choose your role · enter the matrix",
+    "landing.tagline":
+      "AI-powered creation, multilingual reach | Chenchen-Lib — give every word voice, warmth, and a global echo.",
     "landing.creatorBadge": "Creator",
     "landing.creatorTitle": "I'm an author",
     "landing.creatorDesc": "AI drafting · characters & outline · narrative simulation",
@@ -24,11 +26,34 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.connecting": "Connecting…",
     "landing.connectWallet": "Connect wallet · MetaMask",
 
+    "workspace.sessionLoading": "Restoring session…",
     "workspace.connectingTitle": "Connecting wallet…",
     "workspace.connectingHint": "Approve the request in your extension or popup.",
-    "workspace.gateTitle": "The workspace requires a connected wallet.",
+    "workspace.gateTitle": "Sign in to open the workspace.",
     "workspace.gateHint":
-      "If you connected before, refresh to restore the session (no extra prompts). Otherwise tap below to connect.",
+      "Choose a sign-in method below. If you signed in before, refresh may restore your session without extra prompts.",
+    "workspace.gateTablistAria": "Workspace sign-in method",
+    "workspace.gateTabEmail": "Email & password",
+    "workspace.gateTabWallet": "MetaMask",
+    "workspace.walletGateTitle": "Connect with MetaMask",
+    "workspace.walletGateBlurb":
+      "Use the browser extension. Approve the connection request when prompted.",
+    "workspace.connectWalletMetaMask": "Connect MetaMask",
+    "workspace.walletGateRefreshHint":
+      "If you connected before, try refreshing the page to restore the session.",
+    "workspace.emailAuthBlurb":
+      "No browser wallet needed — register once, then sign in on this device.",
+    "workspace.emailLogin": "Sign in",
+    "workspace.emailRegister": "Register",
+    "workspace.emailLabel": "Email",
+    "workspace.passwordLabel": "Password (8+ characters)",
+    "workspace.emailAuthBusy": "Please wait…",
+    "workspace.emailLoginSubmit": "Sign in",
+    "workspace.emailRegisterSubmit": "Create account",
+    "workspace.emailAuthError": "Request failed",
+    "workspace.emailAuthNetworkError": "Network error",
+    "workspace.emailAuthMissingAuthorId":
+      "Signed in but server did not return an account id. Please try again or contact support.",
     "workspace.connectWallet": "Connect wallet",
     "workspace.backHome": "Back to home",
     "workspace.tabNovels": "My novels",
@@ -37,6 +62,7 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "workspace.tabTranslation": "Translation",
     "workspace.tabAnalytics": "Active wallets",
     "workspace.tabTickets": "Tickets",
+    "workspace.tabAdminMembers": "VIP admin",
     "workspace.tabSettings": "Account",
 
     "settings.title": "Account settings",
@@ -64,6 +90,8 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "wallet.disconnecting": "Disconnecting…",
     "wallet.connectedShort": "Connected",
     "wallet.connectedLine": "Connected · 0x…{tail}",
+    "wallet.emailLine": "Email · {email}",
+    "wallet.emailLogout": "Sign out",
     "wallet.guideAria": "MetaMask setup guide",
 
     "aiAssistant.title": "Sidaopu",
@@ -91,6 +119,8 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.navPitch": "郴郴文库介绍",
     "landing.navGuide": "使用方法指南",
     "landing.heroTitle": "选择你的身份 · 进入矩阵",
+    "landing.tagline":
+      "AI赋能创作，多语连接世界 | Chenchen-Lib，让每一段文字都有声音、有温度、有全球回响",
     "landing.creatorBadge": "Creator",
     "landing.creatorTitle": "我是作者",
     "landing.creatorDesc": "AI 稿面 · 角色与大纲 · 叙事推演",
@@ -105,11 +135,33 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.connecting": "连接中…",
     "landing.connectWallet": "连接钱包以继续 · MetaMask",
 
+    "workspace.sessionLoading": "正在恢复会话…",
     "workspace.connectingTitle": "正在连接钱包…",
     "workspace.connectingHint": "请在扩展或弹窗中完成授权",
-    "workspace.gateTitle": "使用工作台需要先连接钱包",
+    "workspace.gateTitle": "使用工作台请先登录",
     "workspace.gateHint":
-      "若本机曾连接过，刷新后会自动恢复会话（无需重复弹窗）。首次使用或恢复失败时，请点击下方按钮连接。",
+      "请选择一种方式登录。若本机曾登录过，刷新页面可能自动恢复会话。",
+    "workspace.gateTablistAria": "工作台登录方式",
+    "workspace.gateTabEmail": "邮箱密码",
+    "workspace.gateTabWallet": "MetaMask 钱包",
+    "workspace.walletGateTitle": "使用 MetaMask 连接",
+    "workspace.walletGateBlurb":
+      "需安装浏览器扩展，点击连接后在弹窗中确认授权。",
+    "workspace.connectWalletMetaMask": "连接 MetaMask",
+    "workspace.walletGateRefreshHint":
+      "若曾连接过钱包，可先尝试刷新页面以恢复会话。",
+    "workspace.emailAuthBlurb": "无需安装钱包扩展：注册后使用邮箱密码即可创作。",
+    "workspace.emailLogin": "登录",
+    "workspace.emailRegister": "注册",
+    "workspace.emailLabel": "邮箱",
+    "workspace.passwordLabel": "密码（至少 8 位）",
+    "workspace.emailAuthBusy": "请稍候…",
+    "workspace.emailLoginSubmit": "登录",
+    "workspace.emailRegisterSubmit": "注册并登录",
+    "workspace.emailAuthError": "请求失败",
+    "workspace.emailAuthNetworkError": "网络异常",
+    "workspace.emailAuthMissingAuthorId":
+      "登录响应异常（未返回账户标识），请重试或联系管理员。",
     "workspace.connectWallet": "连接钱包",
     "workspace.backHome": "返回首页",
     "workspace.tabNovels": "我的小说",
@@ -118,6 +170,7 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "workspace.tabTranslation": "多语言翻译",
     "workspace.tabAnalytics": "活跃钱包看板",
     "workspace.tabTickets": "工单管理",
+    "workspace.tabAdminMembers": "会员管理",
     "workspace.tabSettings": "账户设置",
 
     "settings.title": "账户设置",
@@ -145,6 +198,8 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "wallet.disconnecting": "断开中…",
     "wallet.connectedShort": "已连接",
     "wallet.connectedLine": "已连接 · 0x…{tail}",
+    "wallet.emailLine": "邮箱 · {email}",
+    "wallet.emailLogout": "退出邮箱登录",
     "wallet.guideAria": "MetaMask 安装指南",
 
     "aiAssistant.title": "斯道普",

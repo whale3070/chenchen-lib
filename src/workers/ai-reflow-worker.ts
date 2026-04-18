@@ -40,13 +40,24 @@ async function processReflow(data: AiReflowJobData) {
   });
 
   try {
-    await autoFormatChaptersForPublish({
+    const formatResult = await autoFormatChaptersForPublish({
       authorLower,
       novelId,
       chapterIds,
+      authorPrompt: cur.aiReflowAuthorPrompt,
+      firstLineIndent: cur.firstLineIndent,
     });
     cur = await readPublishRecordFs(authorLower, novelId);
     if (!cur || (cur.aiReflowGeneration ?? 0) !== expectedGeneration) return;
+    if (formatResult.apiError) {
+      await writePublishRecordFs({
+        ...cur,
+        aiReflowStatus: "error",
+        aiReflowError: formatResult.apiError.slice(0, 500),
+        aiReflowFinishedAt: new Date().toISOString(),
+      });
+      return;
+    }
     await writePublishRecordFs({
       ...cur,
       aiReflowStatus: "done",

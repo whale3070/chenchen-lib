@@ -4,6 +4,7 @@ import path from "node:path";
 import { isAddress } from "viem";
 
 import { CHAPTER_OUTLINE_MAX_CHARS } from "@/lib/chapter-outline";
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { isAdminWallet, isPaidMemberActive } from "@/lib/server/paid-membership";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -123,7 +124,7 @@ async function readChapterContentPayload(
   const fp = chapterContentJsonPath(authorLower, novelId, chapterId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    return JSON.parse(raw) as ChapterContentPayload;
+    return parseLeadingJsonValue(raw) as ChapterContentPayload;
   } catch (e: unknown) {
     const code =
       e && typeof e === "object" && "code" in e
@@ -278,7 +279,7 @@ export async function POST(req: NextRequest) {
   let structure: StructurePayload;
   try {
     const raw = await fs.readFile(structurePath(walletLower, novelId), "utf8");
-    structure = JSON.parse(raw) as StructurePayload;
+    structure = parseLeadingJsonValue(raw) as StructurePayload;
   } catch {
     return badRequest("未找到作品大纲数据，请先保存章节结构。");
   }

@@ -2,6 +2,7 @@ import { isAddress } from "viem";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 import type { NovelMeta } from "@/app/api/v1/novels/route";
@@ -46,7 +47,7 @@ async function readAuthorNovels(
   );
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as { novels?: NovelMeta[] };
+    const data = parseLeadingJsonValue(raw) as { novels?: NovelMeta[] };
     if (data && Array.isArray(data.novels)) return data.novels;
     return [];
   } catch (e: unknown) {

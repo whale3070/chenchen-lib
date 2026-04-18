@@ -4,9 +4,10 @@ import { useDisconnect } from "wagmi";
 
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 import { useSiteLocale } from "@/providers/site-locale-provider";
+import { useAuthStore } from "@/store/auth-store";
 
 /**
- * 钱包连接（编辑器 / 工作台共用）
+ * 钱包连接（编辑器 / 工作台共用）；无钱包时可显示邮箱会话。
  */
 export function WalletConnect() {
   const { t } = useSiteLocale();
@@ -21,12 +22,52 @@ export function WalletConnect() {
     closeWalletGuide,
   } = useWeb3Auth();
   const { disconnect, isPending: isDisconnecting } = useDisconnect();
+  const sessionEmail = useAuthStore((s) => s.sessionEmail);
+  const authorId = useAuthStore((s) => s.authorId);
+  const setAuthorId = useAuthStore((s) => s.setAuthorId);
+  const setSessionEmail = useAuthStore((s) => s.setSessionEmail);
 
   const handleConnect = () => {
     void requestConnect();
   };
 
+  const logoutEmail = async () => {
+    try {
+      await fetch("/api/v1/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      /* ignore */
+    }
+    setAuthorId(null);
+    setSessionEmail(null);
+  };
+
   if (!isConnected || !address) {
+    if (authorId && sessionEmail) {
+      const label =
+        sessionEmail.length > 24
+          ? `${sessionEmail.slice(0, 12)}…${sessionEmail.slice(-8)}`
+          : sessionEmail;
+      return (
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className="inline-flex max-w-[240px] items-center truncate rounded-lg border border-sky-500/55 bg-sky-50 px-2.5 py-1.5 text-xs font-medium text-sky-900 shadow-sm dark:border-sky-500/45 dark:bg-sky-950/55 dark:text-sky-200"
+            title={sessionEmail}
+          >
+            {t("wallet.emailLine").replace("{email}", label)}
+          </span>
+          <button
+            type="button"
+            onClick={() => void logoutEmail()}
+            className="cursor-pointer rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-800 transition-colors hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+          >
+            {t("wallet.emailLogout")}
+          </button>
+        </div>
+      );
+    }
     return (
       <>
         <button

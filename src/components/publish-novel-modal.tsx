@@ -37,6 +37,8 @@ export type PublishNovelModalProps = {
     updateCommitment: "none" | number;
     refundRuleAck: boolean;
     layoutMode: PublishLayoutMode;
+    /** AI 自动排版时的补充说明；保留排版时传空串以清空已存说明 */
+    aiReflowAuthorPrompt: string;
   }) => Promise<void>;
 };
 
@@ -64,6 +66,7 @@ export function PublishNovelModal({
   const [weeklyN, setWeeklyN] = useState(3);
   const [refundRuleAck, setRefundRuleAck] = useState(false);
   const [layoutMode, setLayoutMode] = useState<PublishLayoutMode>("preserve");
+  const [aiReflowAuthorPrompt, setAiReflowAuthorPrompt] = useState("");
   const [tagDraft, setTagDraft] = useState("");
   const [metaGeneratedBy, setMetaGeneratedBy] = useState<"deepseek" | "fallback" | null>(
     null,
@@ -88,6 +91,7 @@ export function PublishNovelModal({
       }
       setRefundRuleAck(savedRecord.refundRuleAck);
       setLayoutMode(savedRecord.layoutMode ?? "preserve");
+      setAiReflowAuthorPrompt(savedRecord.aiReflowAuthorPrompt ?? "");
       setTagDraft("");
       setMetaGeneratedBy(null);
     } else {
@@ -105,6 +109,7 @@ export function PublishNovelModal({
       setWeeklyN(3);
       setRefundRuleAck(false);
       setLayoutMode("preserve");
+      setAiReflowAuthorPrompt("");
       setTagDraft("");
       setMetaGeneratedBy(null);
     }
@@ -150,6 +155,8 @@ export function PublishNovelModal({
         updateCommitment: commitMode === "none" ? "none" : weeklyN,
         refundRuleAck: commitMode === "weekly" ? refundRuleAck : false,
         layoutMode,
+        aiReflowAuthorPrompt:
+          layoutMode === "ai_reflow" ? aiReflowAuthorPrompt : "",
       });
       onClose();
     } catch (e) {
@@ -397,6 +404,27 @@ export function PublishNovelModal({
                         </span>
                       </span>
                     </label>
+                    {layoutMode === "ai_reflow" ? (
+                      <div className="mt-2 rounded-lg border border-[#2a3f5c] bg-[#0d1625] p-3">
+                        <label className="block text-xs font-medium text-zinc-300">
+                          AI 排版补充说明（可选）
+                        </label>
+                        <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                          例如：分段习惯、对话分行、空行、标点/引号风格、是否首行缩进等。版式类说明会优先于默认模板落实。硬规则仍有效：不改剧情与人名地名、不删改图片占位符。最多 2000 字。
+                        </p>
+                        <textarea
+                          value={aiReflowAuthorPrompt}
+                          onChange={(e) => setAiReflowAuthorPrompt(e.target.value)}
+                          rows={4}
+                          maxLength={2000}
+                          className={fieldClass + " mt-2 font-mono text-xs"}
+                          placeholder="在此输入给排版模型的补充说明…"
+                        />
+                        <p className="mt-1 text-right text-[10px] text-zinc-600">
+                          {aiReflowAuthorPrompt.length}/2000
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="mt-3">

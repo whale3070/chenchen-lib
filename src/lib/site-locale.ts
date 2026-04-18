@@ -1,6 +1,9 @@
 /** Persisted UI language (BCP-47). Machine-translated UI uses cached bundles for non-built-in locales. */
 export const SITE_LOCALE_STORAGE_KEY = "chenchen:site:locale:v1";
 
+/** Set by middleware from IP country; readable by JS when user has not saved a UI language. */
+export const GEO_UI_LOCALE_COOKIE = "chenchen_geo_ui_locale";
+
 export const DEFAULT_SITE_LOCALE = "en";
 
 /** Locales with hand-written message catalogs (no MT). */

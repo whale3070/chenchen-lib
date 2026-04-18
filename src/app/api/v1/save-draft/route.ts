@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { getDraftFilePath } from "@/lib/draft-path";
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -41,7 +42,7 @@ function badRequest(message: string) {
 async function readDraftPayload(fp: string): Promise<DraftPayload | null> {
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as DraftPayload;
+    const data = parseLeadingJsonValue(raw) as DraftPayload;
     if (!data || typeof data !== "object") return null;
     return data;
   } catch (e: unknown) {
@@ -155,7 +156,7 @@ export async function GET(req: NextRequest) {
   const fp = await draftPath(authorId, docId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as DraftPayload;
+    const data = parseLeadingJsonValue(raw) as DraftPayload;
     return NextResponse.json({
       html: data.html ?? null,
       json: data.json ?? null,

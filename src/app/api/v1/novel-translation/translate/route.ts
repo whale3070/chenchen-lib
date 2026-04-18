@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 import { paidMemberForbiddenResponse } from "@/lib/server/paid-membership";
 import { trackWalletEvent } from "@/lib/server/wallet-analytics";
@@ -173,7 +174,7 @@ async function readChapterText(
   chapterId: string,
 ): Promise<string> {
   const raw = await fs.readFile(structurePath(authorLower, novelId), "utf8");
-  const structure = JSON.parse(raw) as StructurePayload;
+  const structure = parseLeadingJsonValue(raw) as StructurePayload;
   const chapter = (structure.nodes ?? []).find(
     (n) => n.kind === "chapter" && n.id === chapterId,
   );
@@ -187,7 +188,7 @@ async function readChapterText(
 
 async function readAllChapterText(authorLower: string, novelId: string): Promise<string> {
   const raw = await fs.readFile(structurePath(authorLower, novelId), "utf8");
-  const structure = JSON.parse(raw) as StructurePayload;
+  const structure = parseLeadingJsonValue(raw) as StructurePayload;
   const chapterTexts = (structure.nodes ?? [])
     .filter((n) => n.kind === "chapter")
     .map((chapter) => {
@@ -204,7 +205,7 @@ async function readAllChapterText(authorLower: string, novelId: string): Promise
 
 async function readDraftText(authorLower: string, novelId: string): Promise<string> {
   const raw = await fs.readFile(draftPath(authorLower, novelId), "utf8");
-  const draft = JSON.parse(raw) as { html?: unknown };
+  const draft = parseLeadingJsonValue(raw) as { html?: unknown };
   const html = typeof draft.html === "string" ? draft.html : "";
   return htmlToPlainText(html);
 }
@@ -219,7 +220,7 @@ async function readNovelTitle(authorLower: string, novelId: string): Promise<str
   );
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = parseLeadingJsonValue(raw) as {
       novels?: Array<{ id?: string; title?: string }>;
     };
     const found = parsed.novels?.find((n) => n.id === novelId);
@@ -584,7 +585,7 @@ export async function POST(req: NextRequest) {
     };
     try {
       const raw = await fs.readFile(fp, "utf8");
-      const parsed = JSON.parse(raw) as TranslationStore;
+      const parsed = parseLeadingJsonValue(raw) as TranslationStore;
       if (
         parsed &&
         typeof parsed === "object" &&

@@ -116,14 +116,106 @@ export async function readPaidMemberRecord(
   }
 }
 
-/** 订阅有效：status 为 active 且 currentPeriodEnd 晚于当前时间 */
-export async function isPaidMemberActive(walletLower: string): Promise<boolean> {
+/** 单条会员记录是否处于「当前可视为付费有效」的窗口（与 isPaidMemberActive 判定一致，不读盘时可配合已有 record 使用） */
+export function isPaidMemberRecordActive(rec: PaidMemberRecord | null): boolean {
   if (membershipCheckDisabled()) return true;
-  const rec = await readPaidMemberRecord(walletLower);
   if (!rec || rec.status !== "active") return false;
   const end = new Date(rec.currentPeriodEnd);
   if (Number.isNaN(end.getTime())) return false;
   return end.getTime() > Date.now();
+}
+
+/** 订阅有效：status 为 active 且 currentPeriodEnd 晚于当前时间 */
+export async function isPaidMemberActive(walletLower: string): Promise<boolean> {
+  if (membershipCheckDisabled()) return true;
+  const rec = await readPaidMemberRecord(walletLower);
+  return isPaidMemberRecordActive(rec);
+}
+
+export type PaidMemberListItem = {
+  address: string;
+  record: PaidMemberRecord;
+};
+
+/** 列出 `.data/billing/members/*.json` 中的会员记录（用于管理员后台） */
+export async function listPaidMemberRecords(): Promise<PaidMemberListItem[]> {
+  await fs.mkdir(MEMBERS_DIR, { recursive: true });
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(MEMBERS_DIR);
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return [];
+    throw e;
+  }
+  const out: PaidMemberListItem[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const base = name.slice(0, -5);
+    if (!/^0x[a-f0-9]{40}$/.test(base)) continue;
+    const rec = await readPaidMemberRecord(base);
+    if (rec) out.push({ address: base, record: rec });
+  }
+  out.sort((a, b) => a.address.localeCompare(b.address));
+  return out;
+}
+
+/**
+ * 授予或续期 VIP：在现有周期结束时间基础上顺延 extendDays（若仍在有效期内），否则从当前时间起算。
+ */
+export async function grantPaidMember(params: {
+  walletLower: string;
+  extendDays: number;
+}): Promise<PaidMemberRecord> {
+  const base = memberJsonBasename(params.walletLower);
+  if (!base) {
+    throw new Error("invalid_wallet");
+  }
+  const days = params.extendDays;
+  if (!Number.isFinite(days) || days < 1 || days > 3650) {
+    throw new Error("invalid_extend_days");
+  }
+  const existing = await readPaidMemberRecord(base);
+  const now = Date.now();
+  let startMs = now;
+  if (existing && existing.status === "active") {
+    const curEnd = new Date(existing.currentPeriodEnd).getTime();
+    if (Number.isFinite(curEnd) && curEnd > now) startMs = curEnd;
+  }
+  const end = new Date(startMs + Math.floor(days) * 86_400_000);
+  const rec: PaidMemberRecord = {
+    status: "active",
+    currentPeriodEnd: end.toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await fs.mkdir(MEMBERS_DIR, { recursive: true });
+  await fs.writeFile(
+    path.join(MEMBERS_DIR, `${base}.json`),
+    `${JSON.stringify(rec, null, 2)}\n`,
+    "utf8",
+  );
+  return rec;
+}
+
+/** 撤销 VIP：删除对应会员文件（与「未订阅」一致） */
+export async function revokePaidMember(walletLower: string): Promise<boolean> {
+  const base = memberJsonBasename(walletLower);
+  if (!base) return false;
+  const fp = path.join(MEMBERS_DIR, `${base}.json`);
+  try {
+    await fs.unlink(fp);
+    return true;
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return false;
+    throw e;
+  }
 }
 
 /** 未通过时返回 403 JSON，通过时返回 null（管理员地址豁免） */

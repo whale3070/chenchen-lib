@@ -31,6 +31,11 @@ export type NovelPublishRecord = {
   publishedChapterIds?: string[];
   /** 发布排版策略：保留原排版 | AI 文本重排 */
   layoutMode?: PublishLayoutMode;
+  /**
+   * 选择 AI 自动排版时：作者补充说明（分段、标点、缩进、对话样式等），由 worker 拼入 DeepSeek 提示词；
+   * 后处理会尊重 firstLineIndent 及补充说明中「不要首行缩进」等版式意图。硬约束仍为不改剧情、不删改占位符。
+   */
+  aiReflowAuthorPrompt?: string;
   /** 阅读页段落样式：是否首行缩进 */
   firstLineIndent?: boolean;
   /** 章节 ID → 作者托管朗读音频 URL（通常为 /api/v1/audio-host?path=…） */

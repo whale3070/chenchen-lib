@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -67,7 +68,7 @@ function htmlToPlainText(html: string) {
 
 async function readFromStructure(authorLower: string, novelId: string): Promise<string> {
   const raw = await fs.readFile(structurePath(authorLower, novelId), "utf8");
-  const structure = JSON.parse(raw) as StructurePayload;
+  const structure = parseLeadingJsonValue(raw) as StructurePayload;
   const chapter = (structure.nodes ?? []).find((n) => n.kind === "chapter");
   const htmlCandidate =
     chapter?.metadata?.chapterHtmlMobile ??
@@ -79,7 +80,7 @@ async function readFromStructure(authorLower: string, novelId: string): Promise<
 
 async function readFromDraft(authorLower: string, novelId: string): Promise<string> {
   const raw = await fs.readFile(draftPath(authorLower, novelId), "utf8");
-  const draft = JSON.parse(raw) as { html?: unknown };
+  const draft = parseLeadingJsonValue(raw) as { html?: unknown };
   const html = typeof draft.html === "string" ? draft.html : "";
   return htmlToPlainText(html).slice(0, 300);
 }

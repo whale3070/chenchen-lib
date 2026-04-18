@@ -4,10 +4,12 @@ import path from "node:path";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { isAddress } from "viem";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 900;
 
 const MAX_MP3_BYTES = 100 * 1024 * 1024;
 
@@ -68,7 +70,7 @@ async function readIndex(authorLower: string): Promise<VideoExtractIndex> {
   const fp = indexPath(authorLower);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as VideoExtractIndex;
+    const data = parseLeadingJsonValue(raw) as VideoExtractIndex;
     if (data && Array.isArray(data.items)) {
       return { authorId: authorLower, items: data.items };
     }

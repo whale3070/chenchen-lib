@@ -10,6 +10,7 @@ import path from "node:path";
 
 import { enqueueAiReflowJob } from "@/lib/server/ai-reflow-queue";
 import { paidMemberForbiddenResponse } from "@/lib/server/paid-membership";
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import {
   readPublishRecordFs,
   safeNovelSegment,
@@ -79,7 +80,7 @@ async function collectAssignedArticleIds() {
       if (!e.isFile() || !e.name.endsWith(".json")) continue;
       try {
         const raw = await fs.readFile(path.join(dir, e.name), "utf8");
-        const obj = JSON.parse(raw) as { articleId?: unknown };
+        const obj = parseLeadingJsonValue(raw) as { articleId?: unknown };
         if (typeof obj.articleId === "string" && obj.articleId.trim()) {
           ids.add(obj.articleId.trim());
         }
@@ -128,7 +129,7 @@ async function readAuthorNovelList(authorLower: string): Promise<NovelMetaLite[]
   );
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const data = JSON.parse(raw) as { novels?: NovelMetaLite[] };
+    const data = parseLeadingJsonValue(raw) as { novels?: NovelMetaLite[] };
     if (data?.novels && Array.isArray(data.novels)) return data.novels;
   } catch (e: unknown) {
     const code =
@@ -147,7 +148,7 @@ async function readStructureChapterIds(
   const fp = structureFilePath(authorLower, novelId);
   try {
     const raw = await fs.readFile(fp, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = parseLeadingJsonValue(raw) as {
       nodes?: Array<{ id?: unknown; kind?: unknown }>;
     };
     return (parsed.nodes ?? [])
@@ -227,6 +228,26 @@ function normalizeLayoutMode(raw: unknown): "preserve" | "ai_reflow" {
 
 function normalizeFirstLineIndent(raw: unknown): boolean {
   return raw === true;
+}
+
+const AI_REFLOW_AUTHOR_PROMPT_MAX = 2000;
+
+function normalizeAiReflowAuthorPrompt(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").trim();
+  if (!t) return undefined;
+  return t.slice(0, AI_REFLOW_AUTHOR_PROMPT_MAX);
+}
+
+/** 请求体显式带键时用新值（含空串表示清空）；否则保留已有配置 */
+function resolveAiReflowAuthorPrompt(
+  o: Record<string, unknown>,
+  existing: NovelPublishRecord | null,
+): string | undefined {
+  if ("aiReflowAuthorPrompt" in o) {
+    return normalizeAiReflowAuthorPrompt(o.aiReflowAuthorPrompt);
+  }
+  return existing?.aiReflowAuthorPrompt;
 }
 
 /** 取消/覆盖上一波后台排版任务，避免旧任务写回覆盖新配置 */
@@ -430,6 +451,7 @@ export async function POST(req: NextRequest) {
       publishedChapterIds: Array.from(current),
       layoutMode,
       firstLineIndent,
+      aiReflowAuthorPrompt: resolveAiReflowAuthorPrompt(o, existing),
       publishedAt: existing.publishedAt || new Date().toISOString(),
     };
     let aiReflowQueued = false;
@@ -511,6 +533,7 @@ export async function POST(req: NextRequest) {
       publishedChapterIds: allChapterIds,
       layoutMode,
       firstLineIndent,
+      aiReflowAuthorPrompt: resolveAiReflowAuthorPrompt(o, existing),
       publishedAt: existing.publishedAt || new Date().toISOString(),
     };
     let aiReflowQueued = false;
@@ -672,6 +695,7 @@ export async function POST(req: NextRequest) {
     publishedChapterIds,
     layoutMode,
     firstLineIndent,
+    aiReflowAuthorPrompt: resolveAiReflowAuthorPrompt(o, existing),
     publishedAt: new Date().toISOString(),
     withdrawnAt: null,
     chapterNarrationAudio: existing?.chapterNarrationAudio,

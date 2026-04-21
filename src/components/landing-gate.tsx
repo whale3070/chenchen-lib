@@ -6,6 +6,7 @@ import { useCallback, useMemo } from "react";
 
 import { FloatingReaderAiShell } from "@/components/floating-reader-ai-shell";
 import { ReaderAiRecommendPanel } from "@/components/reader-ai-recommend-panel";
+import { SiteLocaleControl } from "@/components/site-locale-control";
 import { getLandingProgressTimeline } from "@/i18n/landing-progress";
 import { useSiteLocale } from "@/providers/site-locale-provider";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
@@ -94,7 +95,7 @@ export function LandingGate() {
           Chenchen-Lib
         </p>
         <nav
-          className="mb-8 flex flex-wrap items-center justify-center gap-2"
+          className="mb-8 flex flex-wrap items-center justify-center gap-3"
           aria-label={tPage("landing.navAria")}
         >
           <a
@@ -109,6 +110,11 @@ export function LandingGate() {
           >
             {tPage("landing.navGuide")}
           </Link>
+          <SiteLocaleControl
+            id="landing-site-ui-locale"
+            className="pointer-events-auto rounded-full border border-white/15 bg-white/[0.06] px-3 py-1.5"
+            selectClassName="border-0 bg-transparent py-0.5"
+          />
         </nav>
         <h1 className="mb-4 text-center text-2xl font-semibold tracking-tight text-white md:text-3xl">
           {tPage("landing.heroTitle")}
@@ -174,6 +180,23 @@ export function LandingGate() {
             </Link>
           </motion.div>
         </div>
+
+        <section
+          className="mt-14 w-full max-w-4xl rounded-2xl border border-white/10 bg-[#0b1320]/90 p-5 backdrop-blur-sm md:p-6"
+          aria-labelledby="landing-about-heading"
+        >
+          <h2
+            id="landing-about-heading"
+            className="mb-4 text-center text-base font-semibold text-white md:text-lg"
+          >
+            {tPage("landing.aboutTitle")}
+          </h2>
+          <div className="space-y-4 text-sm leading-relaxed text-zinc-300 md:text-[15px]">
+            <p>{tPage("landing.aboutP1")}</p>
+            <p>{tPage("landing.aboutP2")}</p>
+            <p>{tPage("landing.aboutP3")}</p>
+          </div>
+        </section>
 
         <section className="mt-12 w-full max-w-4xl rounded-2xl border border-white/10 bg-[#0b1320]/90 p-5 backdrop-blur-sm md:p-6">
           <div className="mb-5 flex items-center justify-between">

@@ -20,8 +20,21 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.readerTitle": "I'm a reader",
     "landing.readerDesc": "Library & reading (in development)",
     "landing.readerCta": "Go to library",
+    "landing.aboutTitle": "About Chenchen-Lib",
+    "landing.aboutP1":
+      "Chenchen-Lib is a next-generation AI-powered creation and reading platform for creators and readers worldwide. It is built around lightweight convenience, intelligent efficiency, and global reach—no complicated setup; sign in quickly with email and password.",
+    "landing.aboutP2":
+      "We integrate AI-assisted creation, automatic multilingual translation, TTS audiobook generation, and unified audio/video tools so creators can ship quality work without burning out, generate multilingual editions and audiobooks in one click, and reach a global audience—while readers break language barriers, enjoy text or audio, and get a richer, more flexible reading experience.",
+    "landing.aboutP3":
+      "Unlike traditional web-fiction platforms, we do not bind your copyright or impose harsh gatekeeping. Creators keep full control of their work; every creation can reach a global audience—reading and creation, without borders.",
     "landing.progressTitle": "Development progress",
     "landing.progressOrder": "Newest first",
+    "landing.uiLanguage": "Interface language",
+    "landing.uiLanguageBusy": "Translating UI…",
+    "landing.uiLanguageCurrent": "current",
+    "landing.uiLanguageSearchPlaceholder": "Search language or code…",
+    "landing.uiLanguageEmpty": "No matching language.",
+    "landing.uiLanguageAllLanguages": "All languages",
     "landing.footerHint": "Connect a wallet to create and sync",
     "landing.connecting": "Connecting…",
     "landing.connectWallet": "Connect wallet · MetaMask",
@@ -67,7 +80,7 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
 
     "settings.title": "Account settings",
     "settings.blurb":
-      "You are identified by your wallet address. Connect or disconnect here, and save translation preferences. Interface language is chosen when **Sidaopu** asks your native language (home page); the site then shows hand-written English/Chinese or machine-translated UI for other languages.",
+      "You are identified by your wallet address. Connect or disconnect here, and save translation preferences. Choose interface language from the **Interface language** menu on the home page, here in Account settings, or when **Sidaopu** asks your native language; the site uses hand-written English/Chinese or machine-translated UI for other languages.",
     "settings.translationPrefsTitle": "Translation language preferences",
     "settings.translationPrefsBlurb":
       "Pick target languages and a default. The translation module reads this configuration.",
@@ -129,8 +142,21 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.readerTitle": "我是读者",
     "landing.readerDesc": "书库与阅读体验（开发中）",
     "landing.readerCta": "前往书库",
+    "landing.aboutTitle": "关于 Chenchen-Lib",
+    "landing.aboutP1":
+      "Chenchen-Lib 是一款面向全球创作者与读者的下一代 AI 创作阅读平台，以「轻量便捷、智能高效、全球可达」为核心，无需复杂操作，邮箱密码即可快速登录。",
+    "landing.aboutP2":
+      "我们整合 AI 辅助创作、多语言自动翻译、TTS 有声书生成、音视频一体化工具，让创作者无需耗费大量精力，就能快速产出优质内容、一键生成多语言版本与有声书，轻松实现全球分发；让读者打破语言壁垒，既能读文字、也能听内容，享受更灵活、更丰富的阅读体验。",
+    "landing.aboutP3":
+      "区别于传统网文平台，我们不绑定版权、不设严苛审核，让创作者拥有绝对的内容自主权，让每一份创作都能触达全球受众，让阅读与创作，不再有边界。",
     "landing.progressTitle": "网站开发进度",
     "landing.progressOrder": "按时间由近到远",
+    "landing.uiLanguage": "界面语言",
+    "landing.uiLanguageBusy": "正在翻译界面…",
+    "landing.uiLanguageCurrent": "当前",
+    "landing.uiLanguageSearchPlaceholder": "搜索语言或代码（如 sw、ceb）…",
+    "landing.uiLanguageEmpty": "没有匹配的语言。",
+    "landing.uiLanguageAllLanguages": "全部语言",
     "landing.footerHint": "连接钱包以继续创作与同步",
     "landing.connecting": "连接中…",
     "landing.connectWallet": "连接钱包以继续 · MetaMask",
@@ -175,7 +201,7 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
 
     "settings.title": "账户设置",
     "settings.blurb":
-      "当前通过钱包地址标识作者身份。你可在此连接或断开钱包，并保存多语言翻译偏好。界面语言由首页 **斯道普** 询问你的母语后设置；除中英外，其它语言将使用机器翻译界面文案。",
+      "当前通过钱包地址标识作者身份。你可在此连接或断开钱包，并保存多语言翻译偏好。界面语言可在首页顶部 **界面语言**、本页下方下拉框，或由首页 **斯道普** 询问母语后设置；除中英外，其它语言将使用机器翻译界面文案。",
     "settings.translationPrefsTitle": "翻译语言偏好",
     "settings.translationPrefsBlurb":
       "勾选常用目标语言，并设置默认翻译语言。多语言翻译模块会自动读取这里的配置。",

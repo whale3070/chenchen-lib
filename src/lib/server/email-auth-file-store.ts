@@ -114,6 +114,32 @@ export async function registerEmailUser(
   return { ok: true, authorId: prep.record.authorId };
 }
 
+/** 供管理员等场景：根据注册邮箱解析作者 ID（与 VIP 文件名一致）。未注册则返回 null。 */
+export async function findAuthorIdByEmail(
+  cwd: string,
+  emailRaw: string,
+): Promise<string | null> {
+  const email = normalizeEmail(emailRaw);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return null;
+  }
+  const store = await readStore(cwd);
+  const user = store.users.find((u) => u.email === email);
+  return user?.authorId ?? null;
+}
+
+/** 会员列表展示：由作者 ID（小写 0x）反查注册邮箱，无则 null。 */
+export async function findEmailByAuthorId(
+  cwd: string,
+  authorIdLower: string,
+): Promise<string | null> {
+  const id = authorIdLower.trim().toLowerCase();
+  if (!/^0x[a-f0-9]{40}$/.test(id)) return null;
+  const store = await readStore(cwd);
+  const user = store.users.find((u) => u.authorId.toLowerCase() === id);
+  return user?.email ?? null;
+}
+
 export async function verifyEmailLogin(
   cwd: string,
   emailRaw: string,

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
+import { SiteLocaleControl } from "@/components/site-locale-control";
 import { WalletConnect } from "@/components/wallet-connect";
 import { WorkspaceAuthGate } from "@/components/workspace-auth-gate";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
@@ -86,6 +87,8 @@ type TicketItem = {
 
 type VipMemberRow = {
   address: string;
+  /** 邮箱注册作者时由服务端反查，纯钱包用户为 null */
+  email?: string | null;
   record: {
     status: string;
     currentPeriodEnd: string;
@@ -125,6 +128,9 @@ type VideoExtractListItem = {
   pathParam?: string;
   size: number;
   createdAt: string;
+  status?: "processing" | "ready" | "failed";
+  processError?: string;
+  pendingFileName?: string;
 };
 
 type UnifiedWorkItem =
@@ -211,9 +217,19 @@ const AUDIO_ACCEPT =
 
 const NOVEL_TXT_ACCEPT = ".txt,text/plain";
 
-/** 视频管理：MP4 抽轨；Opus/Ogg 转 MP3；MP3 直传 */
+/** 视频管理：MP4 抽轨；WAV/Opus/Ogg 转 MP3；MP3 直传 */
 const VIDEO_UPLOAD_ACCEPT =
-  "video/mp4,.mp4,audio/mpeg,.mp3,audio/opus,.opus,audio/ogg,.ogg,application/ogg";
+  "video/mp4,.mp4,audio/mpeg,.mp3,audio/wav,.wav,audio/x-wav,audio/wave,audio/opus,.opus,audio/ogg,.ogg,application/ogg";
+
+/** 供 `x-upload-filename-b64`：UTF-8 文件名 → base64（与 extract 路由解码一致） */
+function utf8FileNameToB64(name: string): string {
+  const u8 = new TextEncoder().encode(name);
+  let bin = "";
+  for (let i = 0; i < u8.length; i += 1) {
+    bin += String.fromCharCode(u8[i]!);
+  }
+  return btoa(bin);
+}
 
 function formatModified(iso: string, uiLocale: string) {
   try {
@@ -418,6 +434,14 @@ export function AuthorDashboard() {
   const audioUploadXhrRef = useRef<XMLHttpRequest | null>(null);
   const novelTxtInputRef = useRef<HTMLInputElement | null>(null);
   const videoMp4InputRef = useRef<HTMLInputElement | null>(null);
+  const authorDashboardMountedRef = useRef(true);
+
+  useEffect(() => {
+    authorDashboardMountedRef.current = true;
+    return () => {
+      authorDashboardMountedRef.current = false;
+    };
+  }, []);
 
   /**
    * 不在此自动 requestConnect。刷新后由 wagmi（localStorage + reconnectOnMount）静默恢复会话，
@@ -680,11 +704,19 @@ export function AuthorDashboard() {
           "Content-Type": "application/json",
           "x-wallet-address": authorId,
         },
-        body: JSON.stringify({
-          action: "grant",
-          wallet: vipGrantWallet.trim(),
-          extendDays: vipGrantDays,
-        }),
+        body: JSON.stringify(
+          vipGrantWallet.trim().includes("@")
+            ? {
+                action: "grant" as const,
+                email: vipGrantWallet.trim(),
+                extendDays: vipGrantDays,
+              }
+            : {
+                action: "grant" as const,
+                wallet: vipGrantWallet.trim(),
+                extendDays: vipGrantDays,
+              },
+        ),
       });
       const data = await readApiJsonSafe<{ ok?: boolean; error?: string }>(res);
       if (!res.ok) throw new Error(data.error ?? "操作失败");
@@ -1257,26 +1289,91 @@ export function AuthorDashboard() {
       setVideoExtractUploading(true);
       setVideoExtractUploadError(null);
       try {
-        const fd = new FormData();
-        fd.append("file", f);
+        /** 使用 octet-stream 直传，避免 multipart 在 Next/Undici 下解析失败（Unexpected end of form） */
+        const bodyBuf = await f.arrayBuffer();
         const res = await fetch("/api/v1/video/extract", {
           method: "POST",
-          headers: { "x-wallet-address": authorId },
-          body: fd,
+          headers: {
+            "x-wallet-address": authorId,
+            "Content-Type": "application/octet-stream",
+            "x-upload-filename-b64": utf8FileNameToB64(f.name),
+            "x-upload-mime": f.type || "application/octet-stream",
+          },
+          body: bodyBuf,
         });
         const data = await readApiJsonSafe<{
           item?: VideoExtractListItem;
           error?: string;
+          detail?: string;
+          hint?: string;
+          asyncAccepted?: boolean;
         }>(res);
         if (!res.ok) {
           if (res.status === 408) {
             throw new Error(
-              "请求超时（408）：上传慢或转码较久时，请在 Nginx 调高 client_body_timeout、proxy_read_timeout（建议 ≥600s）；或换较小文件再试。",
+              "请求超时（408）：上传慢或网络不稳时，请在反代调高 client_body_timeout；或换较小文件再试。",
             );
           }
-          throw new Error(data.error ?? `上传失败（HTTP ${res.status}）`);
+          const base = data.error ?? `上传失败（HTTP ${res.status}）`;
+          const extra: string[] = [];
+          if (typeof data.detail === "string" && data.detail.trim()) {
+            extra.push(`详情：${data.detail.trim()}`);
+          }
+          if (typeof data.hint === "string" && data.hint.trim()) {
+            extra.push(data.hint.trim());
+          }
+          throw new Error(extra.length > 0 ? `${base} ${extra.join(" ")}` : base);
         }
         if (data.item) setVideoExtractItems((prev) => [data.item!, ...prev]);
+
+        if (data.asyncAccepted && data.item?.id) {
+          const extractId = data.item.id;
+          const sourceName = data.item.sourceName;
+          void (async () => {
+            const intervalMs = 2000;
+            const maxRounds = 1800;
+            for (let i = 0; i < maxRounds; i++) {
+              await new Promise((r) => setTimeout(r, intervalMs));
+              if (!authorDashboardMountedRef.current) return;
+              try {
+                const pollRes = await fetch("/api/v1/video/extract", {
+                  headers: { "x-wallet-address": authorId },
+                });
+                const pollData = await readApiJsonSafe<{
+                  items?: VideoExtractListItem[];
+                }>(pollRes);
+                if (!pollRes.ok) continue;
+                const list = pollData.items ?? [];
+                const latest = list.find((x) => x.id === extractId);
+                if (!latest) return;
+                setVideoExtractItems((prev) =>
+                  prev.map((x) => (x.id === extractId ? latest : x)),
+                );
+                if (latest.status === "ready" || (!latest.status && latest.mp3Url)) {
+                  if (authorDashboardMountedRef.current) {
+                    window.alert(`「${sourceName}」后台转码完成，已生成 MP3。`);
+                  }
+                  return;
+                }
+                if (latest.status === "failed") {
+                  if (authorDashboardMountedRef.current) {
+                    window.alert(
+                      `「${sourceName}」转码失败：${latest.processError ?? "未知错误"}`,
+                    );
+                  }
+                  return;
+                }
+              } catch {
+                /* 单次轮询失败则继续 */
+              }
+            }
+            if (authorDashboardMountedRef.current) {
+              window.alert(
+                `「${sourceName}」长时间未收到转码完成状态，请稍后刷新列表或联系管理员查看服务日志。`,
+              );
+            }
+          })();
+        }
       } catch (e) {
         setVideoExtractUploadError(e instanceof Error ? e.message : "上传失败");
       } finally {
@@ -2505,8 +2602,9 @@ export function AuthorDashboard() {
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">视频管理</h2>
             <p className="max-w-xl text-sm text-neutral-600 dark:text-neutral-400">
-              上传 MP4（从视频提取音轨）、MP3（直接入库）、或 Opus / Ogg 音频（转码为 MP3）。每条记录可在「语音转文字」Tab 将 MP3
-              转为文稿（ElevenLabs）。在下方选择小说与章节后，于「MP3」Tab 点击「关联到章节」，读者即可在该章「朗读」页播放此音频。
+              上传 MP4（从视频提取音轨）、MP3（直接入库）、WAV / Opus / Ogg（服务端转码为 MP3
+              后入库，与读者「朗读」链一致）。每条记录可在「语音转文字」Tab 将 MP3 转为文稿（ElevenLabs）。在下方选择小说与章节后，于「MP3」Tab
+              点击「关联到章节」，读者即可在该章「朗读」页播放此音频。
             </p>
             <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950">
               <input
@@ -2526,7 +2624,7 @@ export function AuthorDashboard() {
                   onClick={() => videoMp4InputRef.current?.click()}
                   className="rounded-lg border border-violet-500/60 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-800 hover:bg-violet-500/20 disabled:opacity-50 dark:text-violet-200 dark:hover:bg-violet-500/15"
                 >
-                  {videoExtractUploading ? "上传并提取中…" : "选择 MP4 / MP3 / Opus 上传"}
+                  {videoExtractUploading ? "上传中…" : "选择 MP4 / MP3 / WAV / Opus 上传"}
                 </button>
                 <span className="text-xs text-neutral-500">
                   单文件约 ≤220MB；提取结果保存在你的账号下。
@@ -2598,7 +2696,9 @@ export function AuthorDashboard() {
                 ) : videoExtractError ? (
                   <p className="mt-2 text-sm text-rose-400">{videoExtractError}</p>
                 ) : videoExtractItems.length === 0 ? (
-                  <p className="mt-2 text-sm text-zinc-500">暂无记录，请先上传 MP4、MP3 或 Opus / Ogg。</p>
+                  <p className="mt-2 text-sm text-zinc-500">
+                    暂无记录，请先上传 MP4、MP3、WAV 或 Opus / Ogg。
+                  </p>
                 ) : (
                   <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">
                     {videoExtractItems.map((item) => {
@@ -2607,6 +2707,10 @@ export function AuthorDashboard() {
                       const sttErr = videoTranscribeErrorById[item.id];
                       const sttBusy = videoTranscribingId === item.id;
                       const delBusy = videoExtractDeletingId === item.id;
+                      const isProcessing = item.status === "processing";
+                      const isFailed = item.status === "failed";
+                      const canUseMp3 =
+                        !isProcessing && !isFailed && Boolean(item.mp3Url?.trim());
                       return (
                         <li
                           key={item.id}
@@ -2621,6 +2725,12 @@ export function AuthorDashboard() {
                           <p className="text-[11px] text-zinc-500">
                             {(item.size / (1024 * 1024)).toFixed(2)} MB ·{" "}
                             {formatModified(item.createdAt, locale)}
+                            {isProcessing ? (
+                              <span className="ml-1 font-medium text-amber-400">· 转码中</span>
+                            ) : null}
+                            {isFailed ? (
+                              <span className="ml-1 font-medium text-rose-400">· 转码失败</span>
+                            ) : null}
                           </p>
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             <button
@@ -2655,46 +2765,75 @@ export function AuthorDashboard() {
                           </div>
                           {panel === "audio" ? (
                             <>
-                              <audio
-                                controls
-                                src={item.mp3Url}
-                                className="mt-2 w-full"
-                                preload="metadata"
-                              />
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <a
-                                  href={item.mp3Url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-[11px] text-cyan-400 underline"
-                                >
-                                  打开链接
-                                </a>
-                                <button
-                                  type="button"
-                                  disabled={
-                                    videoAssocLinkingId === item.id ||
-                                    !videoAssocNovelId ||
-                                    !videoAssocChapterId
-                                  }
-                                  onClick={() => void linkExtractToChapter(item.mp3Url, item.id)}
-                                  className="rounded border border-emerald-500/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
-                                >
-                                  {videoAssocLinkingId === item.id ? "关联中…" : "关联到章节"}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={
-                                    delBusy ||
-                                    videoAssocLinkingId === item.id ||
-                                    sttBusy
-                                  }
-                                  onClick={() => void deleteVideoExtract(item.id)}
-                                  className="rounded-md border border-rose-500/45 bg-rose-500/10 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-40"
-                                >
-                                  {delBusy ? "删除中…" : "删除 MP3"}
-                                </button>
-                              </div>
+                              {isProcessing ? (
+                                <p className="mt-2 text-[11px] leading-relaxed text-amber-200/90">
+                                  文件已上传并落盘，正在后台转码为 MP3。完成后将弹窗提示；您也可稍后切回本页查看列表状态。
+                                </p>
+                              ) : isFailed ? (
+                                <p className="mt-2 text-[11px] leading-relaxed text-rose-400">
+                                  {item.processError?.trim()
+                                    ? item.processError.trim()
+                                    : "转码失败，请删除后重新上传。"}
+                                </p>
+                              ) : (
+                                <>
+                                  <audio
+                                    controls
+                                    src={item.mp3Url}
+                                    className="mt-2 w-full"
+                                    preload="metadata"
+                                  />
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <a
+                                      href={item.mp3Url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-[11px] text-cyan-400 underline"
+                                    >
+                                      打开链接
+                                    </a>
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        !canUseMp3 ||
+                                        videoAssocLinkingId === item.id ||
+                                        !videoAssocNovelId ||
+                                        !videoAssocChapterId
+                                      }
+                                      onClick={() =>
+                                        void linkExtractToChapter(item.mp3Url, item.id)
+                                      }
+                                      className="rounded border border-emerald-500/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
+                                    >
+                                      {videoAssocLinkingId === item.id ? "关联中…" : "关联到章节"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        delBusy ||
+                                        videoAssocLinkingId === item.id ||
+                                        sttBusy
+                                      }
+                                      onClick={() => void deleteVideoExtract(item.id)}
+                                      className="rounded-md border border-rose-500/45 bg-rose-500/10 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-40"
+                                    >
+                                      {delBusy ? "删除中…" : "删除 MP3"}
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                              {(isProcessing || isFailed) && (
+                                <div className="mt-2">
+                                  <button
+                                    type="button"
+                                    disabled={delBusy || videoAssocLinkingId === item.id || sttBusy}
+                                    onClick={() => void deleteVideoExtract(item.id)}
+                                    className="rounded-md border border-rose-500/45 bg-rose-500/10 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-40"
+                                  >
+                                    {delBusy ? "删除中…" : "删除记录"}
+                                  </button>
+                                </div>
+                              )}
                             </>
                           ) : (
                             <div className="mt-2 space-y-2">
@@ -2703,13 +2842,22 @@ export function AuthorDashboard() {
                                 <span className="font-mono text-zinc-400">ELEVENLABS_API_KEY</span>
                                 。
                               </p>
+                              {!canUseMp3 ? (
+                                <p className="text-[11px] text-amber-200/90">
+                                  {isProcessing
+                                    ? "该条尚在后台转码，完成后即可开始识别。"
+                                    : isFailed
+                                      ? "该条转码失败，无法识别；请删除后重新上传。"
+                                      : "暂无可用的 MP3 链接。"}
+                                </p>
+                              ) : null}
                               {sttErr ? (
                                 <p className="text-[11px] text-rose-400">{sttErr}</p>
                               ) : null}
                               <div className="flex flex-wrap gap-2">
                                 <button
                                   type="button"
-                                  disabled={sttBusy}
+                                  disabled={sttBusy || !canUseMp3}
                                   onClick={() => void transcribeVideoExtract(item.id)}
                                   className="rounded-lg border border-violet-500/50 bg-violet-500/10 px-3 py-1 text-[11px] font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
                                 >
@@ -3504,15 +3652,17 @@ export function AuthorDashboard() {
             <p className="max-w-2xl text-sm text-neutral-600 dark:text-neutral-400">
               仅当连接钱包为{" "}
               <code className="rounded bg-neutral-200 px-1 text-xs dark:bg-neutral-800">ADMIN_ADDRESS</code>{" "}
-              时可见。授予会员将写入{" "}
+              时可见。会员数据写入{" "}
               <code className="rounded bg-neutral-200 px-1 text-xs dark:bg-neutral-800">.data/billing/members/</code>
-              ；续期从当前周期结束时间顺延；撤销将删除该地址的会员文件。
+              （按作者 ID，即 0x 地址文件名）。邮箱注册用户也会分配同一格式的作者 ID；可直接填写注册邮箱，系统会解析为对应 ID。续期从当前周期结束时间顺延；撤销将删除该会员文件。
             </p>
             <div className="grid gap-4 md:grid-cols-2">
               <section className="space-y-3 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
                 <h3 className="text-sm font-semibold text-zinc-100">授予 / 续期 VIP</h3>
                 <div>
-                  <label className="mb-1 block text-xs text-zinc-400">作者钱包地址（0x…）</label>
+                  <label className="mb-1 block text-xs text-zinc-400">
+                    作者 ID（0x…）或注册邮箱
+                  </label>
                   <input
                     type="text"
                     value={vipGrantWallet}
@@ -3520,7 +3670,7 @@ export function AuthorDashboard() {
                     spellCheck={false}
                     autoComplete="off"
                     className="w-full rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 font-mono text-sm text-zinc-100"
-                    placeholder="0x…"
+                    placeholder="0x… 或 user@example.com"
                   />
                 </div>
                 <div>
@@ -3572,7 +3722,14 @@ export function AuthorDashboard() {
                         className="rounded-lg border border-[#2a3b57] bg-[#0f1726] p-3"
                       >
                         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                          <p className="break-all font-mono text-xs text-zinc-200">{row.address}</p>
+                          <div className="min-w-0">
+                            <p className="break-all font-mono text-xs text-zinc-200">{row.address}</p>
+                            {row.email ? (
+                              <p className="mt-0.5 break-all text-[11px] text-sky-400/90">
+                                邮箱：{row.email}
+                              </p>
+                            ) : null}
+                          </div>
                           <span
                             className={
                               row.active
@@ -3610,6 +3767,9 @@ export function AuthorDashboard() {
             <p className="text-sm text-neutral-600 dark:text-neutral-400">
               {t("settings.blurb")}
             </p>
+            <section className="rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
+              <SiteLocaleControl id="workspace-settings-ui-locale" />
+            </section>
             <WalletConnect />
 
             <section className="space-y-3 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">

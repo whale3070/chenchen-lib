@@ -8,6 +8,7 @@ import type { Components } from "react-markdown";
 import { inferSiteLocaleFromUserText } from "@/lib/infer-site-locale-from-text";
 import { READER_AI_LANG_ONBOARDING_DONE_KEY } from "@/lib/reader-ai-lang-onboarding";
 import { normalizeUiLocale } from "@/lib/site-locale";
+import { wantsUiLanguageChange } from "@/lib/ui-locale-switch-intent";
 import type {
   ReaderAiMessage,
   ReaderAiRecommendResponse,
@@ -16,7 +17,8 @@ import type {
 const DEFAULT_STORAGE_KEY = "chenchen:reader:ai-recommend:messages:v1";
 
 /** First assistant line after wallet connect (language onboarding not yet completed). */
-const LANG_ONBOARDING_FIRST_MESSAGE = "你的母语是什么？";
+const LANG_ONBOARDING_FIRST_MESSAGE =
+  "What is your native language? (You can also switch anytime from the **Interface language** menu at the top of the page.)";
 
 function ackForUiLocale(loc: string): string {
   if (loc === "en") {
@@ -29,6 +31,18 @@ function ackForUiLocale(loc: string): string {
     return (
       "好的，已将网站界面切换为 **简体中文**。——斯道普\n\n" +
       "想找书的话，告诉我题材、风格或偏好即可。"
+    );
+  }
+  if (loc === "zh-TW" || loc === "zh-HK") {
+    return (
+      "好的，已將網站介面切換為 **繁體中文**（部分介面可能由英文機翻，用詞或與在地習慣略有差異）。——斯道普\n\n" +
+      "想找書的話，告訴我題材、風格或偏好即可。"
+    );
+  }
+  if (loc === "ar") {
+    return (
+      "تم ضبط لغة واجهة الموقع إلى **العربية** (قد تُترجم بعض النصوص آلياً من الإنجليزية). —Sidaopu\n\n" +
+      "اسألني عن توصيات من مكتبتنا متى شئت (النوع، المزاج، مجاني أم مدفوع، وغيرها)."
     );
   }
   return (
@@ -276,6 +290,28 @@ export function ReaderAiRecommendPanel(props: ReaderAiRecommendPanelProps) {
             id: uid(),
             role: "assistant",
             content: ackForUiLocale(inferred),
+            createdAt: Date.now(),
+          },
+        ]);
+        return;
+      }
+    }
+
+    if (onLocaleInferred && wantsUiLanguageChange(text)) {
+      let inferredSwitch = inferSiteLocaleFromUserText(text);
+      if (!inferredSwitch) {
+        inferredSwitch = await fetchDetectedUiLocale(text);
+      }
+      if (inferredSwitch) {
+        onLocaleInferred(inferredSwitch);
+        setInput("");
+        setMessages((prev) => [
+          ...prev,
+          userMsg,
+          {
+            id: uid(),
+            role: "assistant",
+            content: ackForUiLocale(inferredSwitch),
             createdAt: Date.now(),
           },
         ]);

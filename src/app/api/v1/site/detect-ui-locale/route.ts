@@ -53,7 +53,8 @@ export async function POST(req: NextRequest) {
 
   const system =
     "The user was asked: What is your native language?\n" +
-    "Infer ONE BCP-47 locale tag for their answer (e.g. en, zh-CN, es, ja, ko, fr, de, pt, ru, ar, hi, vi, th, id, tr, pl, nl, it).\n" +
+    "Infer ONE BCP-47 locale tag for their answer (e.g. en, zh-CN, zh-TW, zh-HK, es, ja, ko, fr, de, pt, ru, ar, hi, vi, th, id, tr, pl, nl, it).\n" +
+    "Use zh-TW for Traditional Chinese (Taiwan/Hong Kong/Macau) when the user says 繁体/繁體/正體/台灣/香港等.\n" +
     "Reply with ONLY the tag, lowercase language subtag, no punctuation, no explanation.";
 
   try {

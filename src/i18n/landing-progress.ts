@@ -6,6 +6,15 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 4 月 22 日（第二十五天）",
+    title: "开发进度",
+    items: [
+      "视频管理新增支持 WAV 格式（与其它非 MP3 一样转码为 MP3 后入库）。",
+      "修复大文件 / 部分环境下上传失败的问题（multipart 解析与超时等）。",
+      "视频管理上传拆为两步：先快速上传并落盘，再在后台静默转码；完成后在前台弹窗提示，列表中可看到「转码中」状态。",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 17 日（第二十天）",
     title: "开发进度",
     items: [
@@ -178,6 +187,15 @@ const ZH: ProgressStage[] = [
 ];
 
 const EN: ProgressStage[] = [
+  {
+    dateLabel: "April 22, 2026 (day 25)",
+    title: "Progress",
+    items: [
+      "Workspace video tools: WAV uploads are now supported (same as other non-MP3 sources—transcoded to MP3 for storage).",
+      "Fixed upload failures for large files / certain environments (multipart parsing, timeouts, etc.).",
+      "Upload flow split: quick upload + persist first, then background transcoding with a browser alert when finished; list shows a “transcoding” state while processing.",
+    ],
+  },
   {
     dateLabel: "April 17, 2026 (day 20)",
     title: "Progress",

@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { FloatingReaderAiShell } from "@/components/floating-reader-ai-shell";
 import { ReaderAiRecommendPanel } from "@/components/reader-ai-recommend-panel";
+import { SiteLocaleControl } from "@/components/site-locale-control";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 import { useSiteLocale } from "@/providers/site-locale-provider";
 
@@ -193,14 +194,17 @@ export default function LibraryPage() {
       ) : null}
       <main className="min-h-0 w-full overflow-y-auto px-6 py-10">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-semibold text-cyan-300">读者书库 · 文章 ID</h1>
-          <Link
-            href="/"
-            className="text-sm text-cyan-400 underline-offset-4 hover:text-cyan-300 hover:underline"
-          >
-            返回首页
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <SiteLocaleControl id="library-site-ui-locale" />
+            <Link
+              href="/"
+              className="text-sm text-cyan-400 underline-offset-4 hover:text-cyan-300 hover:underline"
+            >
+              {t("workspace.backHome")}
+            </Link>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button

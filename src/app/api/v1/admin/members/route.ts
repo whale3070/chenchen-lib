@@ -3,6 +3,10 @@ import { isAddress } from "viem";
 import { NextResponse, type NextRequest } from "next/server";
 
 import {
+  findAuthorIdByEmail,
+  findEmailByAuthorId,
+} from "@/lib/server/email-auth-file-store";
+import {
   grantPaidMember,
   isAdminWallet,
   isPaidMemberRecordActive,
@@ -43,11 +47,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ isAdmin: false, items: [] as const });
   }
   const rows = await listPaidMemberRecords();
-  const items = rows.map((r) => ({
-    address: r.address,
-    record: r.record,
-    active: isPaidMemberRecordActive(r.record),
-  }));
+  const cwd = process.cwd();
+  const items = await Promise.all(
+    rows.map(async (r) => ({
+      address: r.address,
+      record: r.record,
+      active: isPaidMemberRecordActive(r.record),
+      email: await findEmailByAuthorId(cwd, r.address),
+    })),
+  );
   return NextResponse.json({ isAdmin: true, items });
 }
 
@@ -68,14 +76,30 @@ export async function POST(req: NextRequest) {
   const o = body as Record<string, unknown>;
   const action = typeof o.action === "string" ? o.action.trim() : "";
   const walletRaw = typeof o.wallet === "string" ? o.wallet.trim() : "";
+  const emailRaw = typeof o.email === "string" ? o.email.trim() : "";
 
-  if (!isAddress(walletRaw)) {
-    return badRequest("无效的钱包地址 wallet");
+  const cwd = process.cwd();
+  let resolvedLower: string;
+  if (emailRaw) {
+    const fromEmail = await findAuthorIdByEmail(cwd, emailRaw);
+    if (!fromEmail) {
+      return badRequest("未找到该邮箱对应的注册账户");
+    }
+    resolvedLower = fromEmail.toLowerCase();
+    if (walletRaw && isAddress(walletRaw)) {
+      const wr = walletRaw.toLowerCase();
+      if (wr !== resolvedLower) {
+        return badRequest("邮箱对应的作者 ID 与填写的 wallet 不一致");
+      }
+    }
+  } else if (walletRaw && isAddress(walletRaw)) {
+    resolvedLower = walletRaw.toLowerCase();
+  } else {
+    return badRequest("请提供有效的 wallet（0x…）或已注册用户的 email");
   }
-  const walletLower = walletRaw.toLowerCase();
 
   if (action === "revoke") {
-    const removed = await revokePaidMember(walletLower);
+    const removed = await revokePaidMember(resolvedLower);
     return NextResponse.json({
       ok: true,
       revoked: removed,
@@ -91,7 +115,10 @@ export async function POST(req: NextRequest) {
       extendDays = Math.floor(o.extendDays);
     }
     try {
-      const record = await grantPaidMember({ walletLower, extendDays });
+      const record = await grantPaidMember({
+        walletLower: resolvedLower,
+        extendDays,
+      });
       return NextResponse.json({ ok: true, record });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";

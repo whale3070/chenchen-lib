@@ -25,6 +25,9 @@ type VideoExtractItem = {
   pathParam: string;
   size: number;
   createdAt: string;
+  status?: "processing" | "ready" | "failed";
+  processError?: string;
+  pendingFileName?: string;
 };
 
 type VideoExtractIndex = {
@@ -142,6 +145,16 @@ export async function POST(req: NextRequest) {
   const item = index.items.find((x) => x.id === extractId);
   if (!item) {
     return notFound("未找到该提取记录");
+  }
+  if (item.status === "processing") {
+    return badRequest("该文件正在后台转码为 MP3，请稍候再试语音转文字");
+  }
+  if (item.status === "failed") {
+    return badRequest(
+      item.processError?.trim()
+        ? `转码失败：${item.processError.trim().slice(0, 400)}`
+        : "转码失败，请删除该记录后重新上传",
+    );
   }
   if (!item.pathParam) {
     return badRequest("该记录缺少音频存储路径，请重新上传文件生成新记录后再试");

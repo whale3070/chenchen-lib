@@ -18,6 +18,7 @@ import {
   publishStatusLabelZh,
   type NovelPublishRecord,
 } from "@/lib/novel-publish";
+import { VIDEO_EXTRACT_CHUNK_BYTES } from "@/lib/video-extract-constants";
 
 type NovelListItem = {
   id: string;
@@ -127,6 +128,8 @@ type VideoExtractListItem = {
   /** 服务端索引字段，用于转写等内部能力 */
   pathParam?: string;
   size: number;
+  /** 上传的源文件大小（字节）；与 size（MP3）不同时列表会一并展示 */
+  sourceSize?: number;
   createdAt: string;
   status?: "processing" | "ready" | "failed";
   processError?: string;
@@ -1289,46 +1292,7 @@ export function AuthorDashboard() {
       setVideoExtractUploading(true);
       setVideoExtractUploadError(null);
       try {
-        /** 使用 octet-stream 直传，避免 multipart 在 Next/Undici 下解析失败（Unexpected end of form） */
-        const bodyBuf = await f.arrayBuffer();
-        const res = await fetch("/api/v1/video/extract", {
-          method: "POST",
-          headers: {
-            "x-wallet-address": authorId,
-            "Content-Type": "application/octet-stream",
-            "x-upload-filename-b64": utf8FileNameToB64(f.name),
-            "x-upload-mime": f.type || "application/octet-stream",
-          },
-          body: bodyBuf,
-        });
-        const data = await readApiJsonSafe<{
-          item?: VideoExtractListItem;
-          error?: string;
-          detail?: string;
-          hint?: string;
-          asyncAccepted?: boolean;
-        }>(res);
-        if (!res.ok) {
-          if (res.status === 408) {
-            throw new Error(
-              "请求超时（408）：上传慢或网络不稳时，请在反代调高 client_body_timeout；或换较小文件再试。",
-            );
-          }
-          const base = data.error ?? `上传失败（HTTP ${res.status}）`;
-          const extra: string[] = [];
-          if (typeof data.detail === "string" && data.detail.trim()) {
-            extra.push(`详情：${data.detail.trim()}`);
-          }
-          if (typeof data.hint === "string" && data.hint.trim()) {
-            extra.push(data.hint.trim());
-          }
-          throw new Error(extra.length > 0 ? `${base} ${extra.join(" ")}` : base);
-        }
-        if (data.item) setVideoExtractItems((prev) => [data.item!, ...prev]);
-
-        if (data.asyncAccepted && data.item?.id) {
-          const extractId = data.item.id;
-          const sourceName = data.item.sourceName;
+        const pollExtractJob = (extractId: string, sourceName: string) => {
           void (async () => {
             const intervalMs = 2000;
             const maxRounds = 1800;
@@ -1373,6 +1337,199 @@ export function AuthorDashboard() {
               );
             }
           })();
+        };
+
+        const isLikelyMp3 =
+          f.name.toLowerCase().endsWith(".mp3") ||
+          (f.type || "").toLowerCase().includes("mpeg");
+
+        const optRes = await fetch("/api/v1/video/extract/upload-options", {
+          headers: { "x-wallet-address": authorId },
+          cache: "no-store",
+        });
+        const optData = await readApiJsonSafe<{ directObjectStorage?: boolean }>(optRes);
+        const useObjectStorage = optRes.ok && optData.directObjectStorage === true;
+
+        /** 服务端配置 S3/R2 时：浏览器 PUT 直传桶，再由服务端拉取转码，不经反代大 body */
+        if (useObjectStorage && !isLikelyMp3) {
+          const mime = f.type || "application/octet-stream";
+          const preRes = await fetch("/api/v1/video/extract/presign", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-wallet-address": authorId,
+            },
+            body: JSON.stringify({ fileName: f.name, totalSize: f.size, mime }),
+          });
+          const preData = await readApiJsonSafe<{
+            uploadId?: string;
+            putUrl?: string;
+            contentType?: string;
+            hint?: string;
+            error?: string;
+          }>(preRes);
+          if (!preRes.ok) {
+            throw new Error(
+              preData.error ??
+                (preRes.status === 503
+                  ? "对象存储未配置，已回退失败；请改用分片或单次上传，或联系管理员配置 VIDEO_EXTRACT_S3_*。"
+                  : `预签名失败（HTTP ${preRes.status}）`),
+            );
+          }
+          const putUrl = preData.putUrl;
+          const uploadId = preData.uploadId;
+          const contentType =
+            preData.contentType ?? (mime.split(";")[0]?.trim() || "application/octet-stream");
+          if (!putUrl || !uploadId) throw new Error("预签名响应不完整");
+
+          const putRes = await fetch(putUrl, {
+            method: "PUT",
+            headers: { "Content-Type": contentType },
+            body: f,
+          });
+          if (!putRes.ok) {
+            const tail = (await putRes.text().catch(() => "")).trim().slice(0, 240);
+            throw new Error(
+              `对象存储上传失败（HTTP ${putRes.status}）${tail ? `：${tail}` : ""}。${preData.hint ?? "请检查桶 CORS（允许本站 PUT、Content-Type、Content-Length）。"}`,
+            );
+          }
+
+          const fsRes = await fetch("/api/v1/video/extract/from-storage", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-wallet-address": authorId,
+            },
+            body: JSON.stringify({ uploadId }),
+          });
+          const fsData = await readApiJsonSafe<{
+            item?: VideoExtractListItem;
+            error?: string;
+            asyncAccepted?: boolean;
+          }>(fsRes);
+          if (!fsRes.ok) {
+            throw new Error(fsData.error ?? `入库失败（HTTP ${fsRes.status}）`);
+          }
+          if (fsData.item) setVideoExtractItems((prev) => [fsData.item!, ...prev]);
+          if (fsData.asyncAccepted && fsData.item?.id) {
+            pollExtractJob(fsData.item.id, fsData.item.sourceName);
+          }
+          return;
+        }
+
+        /** 大于单片上限时用分片上传，减轻反代对单次 POST 体大小的限制（如 10MB）；MP3 直存仍走单次上传 */
+        if (f.size > VIDEO_EXTRACT_CHUNK_BYTES && !isLikelyMp3) {
+          const mime = f.type || "application/octet-stream";
+          const initRes = await fetch("/api/v1/video/extract/chunk-session", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-wallet-address": authorId,
+            },
+            body: JSON.stringify({ fileName: f.name, totalSize: f.size, mime }),
+          });
+          const initData = await readApiJsonSafe<{
+            uploadId?: string;
+            chunkSize?: number;
+            totalChunks?: number;
+            error?: string;
+          }>(initRes);
+          if (!initRes.ok) {
+            throw new Error(initData.error ?? `分片会话失败（HTTP ${initRes.status}）`);
+          }
+          const uploadId = initData.uploadId;
+          const chunkSize = initData.chunkSize ?? VIDEO_EXTRACT_CHUNK_BYTES;
+          const totalChunks = initData.totalChunks ?? Math.ceil(f.size / chunkSize);
+          if (!uploadId) throw new Error("服务端未返回 uploadId");
+
+          for (let i = 0; i < totalChunks; i++) {
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize, f.size);
+            const slice = f.slice(start, end);
+            const chunkBuf = await slice.arrayBuffer();
+            const chunkRes = await fetch("/api/v1/video/extract/chunk", {
+              method: "POST",
+              headers: {
+                "x-wallet-address": authorId,
+                "Content-Type": "application/octet-stream",
+                "x-chunk-upload-id": uploadId,
+                "x-chunk-index": String(i),
+                "x-chunk-byte-length": String(chunkBuf.byteLength),
+              },
+              body: chunkBuf,
+            });
+            const cData = await readApiJsonSafe<{ error?: string }>(chunkRes);
+            if (!chunkRes.ok) {
+              throw new Error(
+                cData.error ?? `分片 ${i + 1}/${totalChunks} 上传失败（HTTP ${chunkRes.status}）`,
+              );
+            }
+          }
+
+          const commitRes = await fetch("/api/v1/video/extract/chunk-commit", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-wallet-address": authorId,
+            },
+            body: JSON.stringify({ uploadId }),
+          });
+          const commitData = await readApiJsonSafe<{
+            item?: VideoExtractListItem;
+            error?: string;
+            asyncAccepted?: boolean;
+          }>(commitRes);
+          if (!commitRes.ok) {
+            throw new Error(commitData.error ?? `合并失败（HTTP ${commitRes.status}）`);
+          }
+          if (commitData.item) setVideoExtractItems((prev) => [commitData.item!, ...prev]);
+          if (commitData.asyncAccepted && commitData.item?.id) {
+            pollExtractJob(commitData.item.id, commitData.item.sourceName);
+          }
+          return;
+        }
+
+        /** 使用 octet-stream 直传，避免 multipart 在 Next/Undici 下解析失败（Unexpected end of form） */
+        const bodyBuf = await f.arrayBuffer();
+        const res = await fetch("/api/v1/video/extract", {
+          method: "POST",
+          headers: {
+            "x-wallet-address": authorId,
+            "Content-Type": "application/octet-stream",
+            "x-upload-filename-b64": utf8FileNameToB64(f.name),
+            "x-upload-mime": f.type || "application/octet-stream",
+            /** 与服务端比对，检测反代 client_max_body_size 等导致的静默截断 */
+            "x-upload-byte-length": String(f.size),
+          },
+          body: bodyBuf,
+        });
+        const data = await readApiJsonSafe<{
+          item?: VideoExtractListItem;
+          error?: string;
+          detail?: string;
+          hint?: string;
+          asyncAccepted?: boolean;
+        }>(res);
+        if (!res.ok) {
+          if (res.status === 408) {
+            throw new Error(
+              "请求超时（408）：上传慢或网络不稳时，请在反代调高 client_body_timeout；或换较小文件再试。",
+            );
+          }
+          const base = data.error ?? `上传失败（HTTP ${res.status}）`;
+          const extra: string[] = [];
+          if (typeof data.detail === "string" && data.detail.trim()) {
+            extra.push(`详情：${data.detail.trim()}`);
+          }
+          if (typeof data.hint === "string" && data.hint.trim()) {
+            extra.push(data.hint.trim());
+          }
+          throw new Error(extra.length > 0 ? `${base} ${extra.join(" ")}` : base);
+        }
+        if (data.item) setVideoExtractItems((prev) => [data.item!, ...prev]);
+
+        if (data.asyncAccepted && data.item?.id) {
+          pollExtractJob(data.item.id, data.item.sourceName);
         }
       } catch (e) {
         setVideoExtractUploadError(e instanceof Error ? e.message : "上传失败");
@@ -2603,7 +2760,9 @@ export function AuthorDashboard() {
             <h2 className="text-lg font-semibold">视频管理</h2>
             <p className="max-w-xl text-sm text-neutral-600 dark:text-neutral-400">
               上传 MP4（从视频提取音轨）、MP3（直接入库）、WAV / Opus / Ogg（服务端转码为 MP3
-              后入库，与读者「朗读」链一致）。每条记录可在「语音转文字」Tab 将 MP3 转为文稿（ElevenLabs）。在下方选择小说与章节后，于「MP3」Tab
+              后入库，与读者「朗读」链一致）。若服务端配置了 S3 兼容桶（如 Cloudflare R2），将优先使用浏览器直传对象存储；否则在需转码且文件大于 4MB
+              时会自动分片上传，减轻反代对单次请求体大小的限制。每条记录可在「语音转文字」Tab
+              将 MP3 转为文稿（ElevenLabs）。在下方选择小说与章节后，于「MP3」Tab
               点击「关联到章节」，读者即可在该章「朗读」页播放此音频。
             </p>
             <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950">
@@ -2723,7 +2882,18 @@ export function AuthorDashboard() {
                             {item.sourceName}
                           </p>
                           <p className="text-[11px] text-zinc-500">
-                            {(item.size / (1024 * 1024)).toFixed(2)} MB ·{" "}
+                            {(() => {
+                              const src = item.sourceSize;
+                              const mp3 = item.size;
+                              const showDual =
+                                typeof src === "number" &&
+                                Math.abs(src - mp3) > 512;
+                              const mb = (n: number) => (n / (1024 * 1024)).toFixed(2);
+                              return showDual
+                                ? `源 ${mb(src)} MB · MP3 ${mb(mp3)} MB`
+                                : `${mb(mp3)} MB`;
+                            })()}
+                            {" · "}
                             {formatModified(item.createdAt, locale)}
                             {isProcessing ? (
                               <span className="ml-1 font-medium text-amber-400">· 转码中</span>

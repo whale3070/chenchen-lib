@@ -25,6 +25,7 @@ type VideoExtractItem = {
   pathParam: string;
   size: number;
   createdAt: string;
+  sourceSize?: number;
   status?: "processing" | "ready" | "failed";
   processError?: string;
   pendingFileName?: string;

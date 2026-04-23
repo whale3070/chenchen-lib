@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -10,6 +10,7 @@ import busboy from "busboy";
 import { isAddress } from "viem";
 
 import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
+import { VIDEO_EXTRACT_MAX_BYTES } from "@/lib/video-extract-constants";
 import { after, NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -22,17 +23,99 @@ export const maxDuration = 7200;
 
 const execFileAsync = promisify(execFile);
 
-const MAX_VIDEO_BYTES = 220 * 1024 * 1024;
+const MAX_VIDEO_BYTES = VIDEO_EXTRACT_MAX_BYTES;
 /** 长素材（如 1h+）在慢机上转码可能接近实时数倍；过短会导致 ffmpeg 被杀死、MP3 只有前面一段 */
 const FFMPEG_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
-type VideoExtractItem = {
+/**
+ * 长任务勿用 execFile：stdout/stderr 超过 maxBuffer 时 Node 会杀掉子进程，ffmpeg 可能只生成前面十几分钟。
+ * spawn + 仅保留 stderr 尾部，避免该截断。
+ */
+function runFfmpegSpawn(args: string[], timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ffmpeg", args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
+    let stderrTail = "";
+    const maxTail = 24_576;
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (ch: string) => {
+      stderrTail = (stderrTail + ch).slice(-maxTail);
+    });
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      child.kill("SIGKILL");
+      reject(
+        new Error(
+          `ffmpeg 超时（>${Math.round(timeoutMs / 60000)} 分钟）。${stderrTail ? `stderr 尾部：${stderrTail}` : ""}`,
+        ),
+      );
+    }, timeoutMs);
+    child.once("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          signal
+            ? `ffmpeg 被终止（${signal}）${stderrTail ? `：${stderrTail}` : ""}`
+            : `ffmpeg 退出码 ${code}${stderrTail ? `：${stderrTail}` : ""}`,
+        ),
+      );
+    });
+  });
+}
+
+/** ffprobe 输出很小，可用 execFile */
+async function ffprobeDurationSeconds(filePath: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        /** 默认探测较短时，部分 Ogg/Opus 的 format.duration 不可靠；拉大以便与解码结果对照 */
+        "-analyzeduration",
+        "100000000",
+        "-probesize",
+        String(100 * 1024 * 1024),
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        filePath,
+      ],
+      { maxBuffer: 16_384, timeout: 120_000 },
+    );
+    const n = parseFloat(String(stdout).trim());
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+export type VideoExtractItem = {
   id: string;
   sourceName: string;
   mp3Url: string;
   pathParam: string;
+  /** 入库的 MP3 字节数；转码完成前与「已上传源文件」相同，见 sourceSize */
   size: number;
   createdAt: string;
+  /** 上传的源音/视频大小（字节）；转码完成后仍保留，便于与 MP3 区分 */
+  sourceSize?: number;
   /** 缺省或 ready：可播放；processing：已落盘、后台转码中；failed：转码失败 */
   status?: "processing" | "ready" | "failed";
   processError?: string;
@@ -83,6 +166,45 @@ function decodeFilenameFromB64Header(headerVal: string | null): string {
   } catch {
     return "upload";
   }
+}
+
+function parsePositiveSafeIntHeader(v: string | null): number | null {
+  const raw = v?.trim() ?? "";
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > Number.MAX_SAFE_INTEGER) return null;
+  if (Math.floor(n) !== n) return null;
+  return n;
+}
+
+/**
+ * 工作台 octet-stream 上传会带 `x-upload-byte-length`（即浏览器 File.size）。
+ * 若反代将 client_max_body_size 卡在约 10MB，请求体常被静默截断，FFmpeg 只能解出十几分钟音频。
+ */
+function verifyReceivedBodyMatchesDeclared(
+  req: NextRequest,
+  receivedBytes: number,
+): NextResponse | null {
+  const declared = parsePositiveSafeIntHeader(req.headers.get("x-upload-byte-length"));
+  if (declared != null) {
+    if (declared > MAX_VIDEO_BYTES) {
+      return badRequest(`文件过大（>${MAX_VIDEO_BYTES / (1024 * 1024)}MB）`);
+    }
+    if (declared !== receivedBytes) {
+      return badRequest(
+        `上传体不完整：服务端收到 ${receivedBytes} 字节，与浏览器声明的文件大小 ${declared} 字节不一致。` +
+          "若原文件明显大于约 10MB，多为反向代理将 client_max_body_size 限制过小（如 10m），只转发了首段请求体，转码结果会只有十几分钟。请将 nginx 等对 /api/v1/video/ 的 client_max_body_size 调至 ≥240m，并提高 client_body_timeout、proxy 读写超时；参考 apps/web/nginx-long-api.example.conf。",
+      );
+    }
+    return null;
+  }
+  const cl = parsePositiveSafeIntHeader(req.headers.get("content-length"));
+  if (cl != null && cl <= MAX_VIDEO_BYTES && receivedBytes < cl) {
+    return badRequest(
+      `上传体不完整：Content-Length 为 ${cl}，实际仅收到 ${receivedBytes} 字节。请检查反向代理的 client_max_body_size 与超时配置（参见 apps/web/nginx-long-api.example.conf）。`,
+    );
+  }
+  return null;
 }
 
 /** 请求体为原始字节流，无 multipart；兼容 Next/Undici 下大文件上传不稳定问题 */
@@ -325,7 +447,7 @@ function trimTrailingSlash(s: string) {
   return s.replace(/\/+$/, "");
 }
 
-function getPublicBaseUrl(req: NextRequest): string {
+export function getPublicBaseUrl(req: NextRequest): string {
   const envBase =
     process.env.IMAGE_BED_PUBLIC_BASE_URL ||
     process.env.NEXT_PUBLIC_WEB_BASE_URL ||
@@ -343,7 +465,7 @@ function indexPath(authorLower: string) {
   return path.join(process.cwd(), ".data", "video-extracts", `${authorLower}.json`);
 }
 
-async function readIndex(authorLower: string): Promise<VideoExtractIndex> {
+export async function readIndex(authorLower: string): Promise<VideoExtractIndex> {
   const fp = indexPath(authorLower);
   try {
     const raw = await fs.readFile(fp, "utf8");
@@ -359,13 +481,13 @@ async function readIndex(authorLower: string): Promise<VideoExtractIndex> {
   return { authorId: authorLower, items: [] };
 }
 
-async function writeIndex(index: VideoExtractIndex) {
+export async function writeIndex(index: VideoExtractIndex) {
   const fp = indexPath(index.authorId);
   await fs.mkdir(path.dirname(fp), { recursive: true });
   await fs.writeFile(fp, JSON.stringify(index, null, 2), "utf8");
 }
 
-function pendingExtractAbsPath(authorLower: string, pendingFileName: string) {
+export function pendingExtractAbsPath(authorLower: string, pendingFileName: string) {
   return path.join(process.cwd(), ".data", "video-extract-pending", authorLower, pendingFileName);
 }
 
@@ -390,7 +512,7 @@ async function markExtractJobFailed(
   await fs.unlink(pendingAbs).catch(() => undefined);
 }
 
-async function runVideoExtractJob(args: {
+export async function runVideoExtractJob(args: {
   authorLower: string;
   id: string;
   ext: string;
@@ -410,11 +532,25 @@ async function runVideoExtractJob(args: {
   const inPath = path.join(tmpDir, `in${ext}`);
   const outPath = path.join(tmpDir, "out.mp3");
   try {
-    await fs.copyFile(pendingAbs, inPath);
+    if (ext === ".opus" || ext === ".ogg") {
+      const pendingBody = await fs.readFile(pendingAbs);
+      if (isChainedOpusOggUpload(pendingBody, ext)) {
+        await markExtractJobFailed(
+          authorLower,
+          id,
+          "链式 Ogg/Opus（多个 OpusHead）：FFmpeg 通常只解码第一段，已中止转码。请导出为单一流、转 WAV 或分段上传。",
+          pendingAbs,
+        );
+        return;
+      }
+      await fs.writeFile(inPath, pendingBody);
+    } else {
+      await fs.copyFile(pendingAbs, inPath);
+    }
     try {
-      await execFileAsync(
-        "ffmpeg",
+      await runFfmpegSpawn(
         [
+          "-hide_banner",
           "-nostdin",
           "-loglevel",
           "error",
@@ -430,7 +566,7 @@ async function runVideoExtractJob(args: {
           "mp3",
           outPath,
         ],
-        { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 20 * 1024 * 1024 },
+        FFMPEG_TIMEOUT_MS,
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : "ffmpeg 失败";
@@ -447,6 +583,26 @@ async function runVideoExtractJob(args: {
     }
     if (mp3Stat.size <= 0) {
       await markExtractJobFailed(authorLower, id, "生成的 MP3 为空", pendingAbs);
+      return;
+    }
+
+    const inDur = await ffprobeDurationSeconds(inPath);
+    const outDur = await ffprobeDurationSeconds(outPath);
+    if (
+      inDur != null &&
+      outDur != null &&
+      inDur >= 180 &&
+      outDur < inDur * 0.85
+    ) {
+      const hint =
+        "输出时长明显短于源文件，常见原因：此前 ffmpeg 被 Node maxBuffer 截断（已改为 spawn）、上传不完整、或源文件元数据异常。请删除本条后重新上传。";
+      await markExtractJobFailed(
+        authorLower,
+        id,
+        `${hint}（ffprobe：源约 ${Math.round(inDur)}s，MP3 约 ${Math.round(outDur)}s）`,
+        pendingAbs,
+      );
+      await fs.unlink(outPath).catch(() => undefined);
       return;
     }
 
@@ -467,6 +623,10 @@ async function runVideoExtractJob(args: {
     }
     it.mp3Url = mp3Url;
     it.pathParam = pathParam;
+    /** 转码前列表里 size 为已上传源文件字节数；写入 MP3 大小并保留 sourceSize 供列表展示 */
+    if (typeof it.sourceSize !== "number") {
+      it.sourceSize = it.size;
+    }
     it.size = mp3Stat.size;
     it.status = "ready";
     delete it.processError;
@@ -551,6 +711,34 @@ function inferUploadExt(file: File): string {
   return ".mp4";
 }
 
+/** Opus 识别头（RFC 7845）；链式 Ogg 中每一段逻辑流都会再次出现，FFmpeg 常只解码第一段。 */
+const OPUS_HEAD_MAGIC = Buffer.from("OpusHead");
+
+function countOpusHeadMarkers(data: Uint8Array): number {
+  if (data.byteLength < OPUS_HEAD_MAGIC.length) return 0;
+  let count = 0;
+  for (let i = 0; i <= data.byteLength - OPUS_HEAD_MAGIC.length; i++) {
+    let match = true;
+    for (let j = 0; j < OPUS_HEAD_MAGIC.length; j++) {
+      if (data[i + j] !== OPUS_HEAD_MAGIC[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      count++;
+      i += OPUS_HEAD_MAGIC.length - 1;
+    }
+  }
+  return count;
+}
+
+/** 是否为 FFmpeg 易截断的链式 Opus-in-Ogg（多个 OpusHead）。纯 Vorbis 的 .ogg 不含该魔数，计数为 0。 */
+export function isChainedOpusOggUpload(data: Uint8Array, ext: string): boolean {
+  if (ext !== ".opus" && ext !== ".ogg") return false;
+  return countOpusHeadMarkers(data) > 1;
+}
+
 export async function GET(req: NextRequest) {
   const wh = parseWalletHeader(req);
   if (!wh.ok) return wh.res;
@@ -633,13 +821,25 @@ export async function POST(req: NextRequest) {
     return badRequest(`文件过大（>${MAX_VIDEO_BYTES / (1024 * 1024)}MB）`);
   }
 
+  if (primaryCt === "application/octet-stream") {
+    const lengthMismatch = verifyReceivedBodyMatchesDeclared(req, buf.byteLength);
+    if (lengthMismatch) return lengthMismatch;
+  }
+
+  const ext = inferUploadExt(file);
+  if (isChainedOpusOggUpload(buf, ext)) {
+    return badRequest(
+      "检测到链式 Ogg/Opus（文件内出现多个 Opus 逻辑流头 OpusHead）。部分录音/拼接软件会生成此类文件；" +
+        "当前服务端使用的 FFmpeg 通常只会解码其中第一段，导致 MP3 时长远短于本地完整播放。请改用软件的「单文件/单流」导出，或先用 opus-tools 等能完整解链式 Ogg 的工具转为 WAV 再上传，或将多段拆开分别上传。",
+    );
+  }
+
   const month = new Date().toISOString().slice(0, 7).replace("-", "");
   const publicBase = getPublicBaseUrl(req);
 
   const rawBase =
     path.basename(file.name || "").replace(/[^\w.-]+/g, "_").replace(/\.+$/, "") || "upload";
   const stem = rawBase.replace(/\.[^.]+$/, "") || "upload";
-  const ext = inferUploadExt(file);
   const displaySourceName = file.name || `${stem}${ext}`;
 
   const now = new Date().toISOString();
@@ -660,6 +860,7 @@ export async function POST(req: NextRequest) {
       mp3Url,
       pathParam,
       size: mp3Size,
+      sourceSize: mp3Size,
       createdAt: now,
       status: "ready",
     };
@@ -681,6 +882,7 @@ export async function POST(req: NextRequest) {
     mp3Url: "",
     pathParam: "",
     size: buf.byteLength,
+    sourceSize: buf.byteLength,
     createdAt: now,
     status: "processing",
     pendingFileName,

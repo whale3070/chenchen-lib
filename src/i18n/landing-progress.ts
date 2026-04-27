@@ -6,6 +6,21 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 4 月 26 日（第二十九天）",
+    title: "开发进度",
+    items: [
+      "将「活跃钱包看板」调整为「活跃用户统计」：此前仅有钱包登录，现已支持邮箱 + 钱包登录，看板按作者身份去重统计两类账号合计的活跃用户数（含 DAU/WAU/MAU、趋势与行为分布等文案与接口字段同步）。",
+      "工作台 AI 聊天：支持在本机浏览器记住多轮历史对话；可新建对话、删除当前对话或清空全部对话记录。",
+    ],
+  },
+  {
+    dateLabel: "2026 年 4 月 25 日（第二十八天）",
+    title: "开发进度",
+    items: [
+      "工作台新增 AI 聊天能力，经服务端转发至已配置的 OpenAI 兼容接口；默认模型为 claude-opus-4-6（可通过环境变量 CLAUDE_MODEL 覆盖）。",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 22 日（第二十五天）",
     title: "开发进度",
     items: [
@@ -58,7 +73,7 @@ const ZH: ProgressStage[] = [
     title: "开发进度",
     items: [
       "付费会员 / 免费用户区分：凡从作者工作台、编辑器链路触发、最终会打到模型或 Python AI 服务的，一律视为「作者端 AI」，只对当前订阅有效的付费会员开放；未付费作者仍可用规则切章，仅 AI 切章要会员。",
-      "Aura 小说评估模块引擎已做好，尚未接入 Chenchen 文库前后端。榜单示例：http://198.55.109.102:3000/ranking?round_id=novel2026_kuake",
+      "Aura 小说评估模块引擎已做好，尚未接入巴别塔前后端。榜单示例：http://198.55.109.102:3000/ranking?round_id=novel2026_kuake",
       "本网站前端源码目录：`/root/chenchen-lib/apps/web`（Next.js / App Router）。",
     ],
   },
@@ -188,6 +203,21 @@ const ZH: ProgressStage[] = [
 
 const EN: ProgressStage[] = [
   {
+    dateLabel: "April 26, 2026 (day 29)",
+    title: "Progress",
+    items: [
+      'Renamed the workspace “active wallets” dashboard to “active users”: counts now dedupe by author identity across email/password and MetaMask sign-in (DAU/WAU/MAU, trend chart, and event breakdown copy + API fields updated accordingly).',
+      "Workspace AI chat: conversations persist locally in the browser across visits; you can start a new thread, delete the current thread, or clear all saved threads.",
+    ],
+  },
+  {
+    dateLabel: "April 25, 2026 (day 28)",
+    title: "Progress",
+    items: [
+      "Added workspace AI chat via server-side OpenAI-compatible chat/completions; default model is claude-opus-4-6 (overridable with CLAUDE_MODEL).",
+    ],
+  },
+  {
     dateLabel: "April 22, 2026 (day 25)",
     title: "Progress",
     items: [
@@ -240,7 +270,7 @@ const EN: ProgressStage[] = [
     title: "Progress",
     items: [
       "Paid vs free: all author-workspace / editor flows that ultimately call an LLM or the Python AI service are gated to authors with an active subscription; unpaid authors keep rule-based chapter splitting, while AI chapter split requires membership.",
-      "Aura novel-evaluation engine is ready but not yet integrated with Chenchen-Lib front/back. Sample ranking: http://198.55.109.102:3000/ranking?round_id=novel2026_kuake",
+      "Aura novel-evaluation engine is ready but not yet integrated with Babel Tower front/back. Sample ranking: http://198.55.109.102:3000/ranking?round_id=novel2026_kuake",
       "Web app source lives under `apps/web` in the repo (example deploy path: `/root/chenchen-lib/apps/web`).",
     ],
   },

@@ -8,6 +8,7 @@ export type WalletEventType =
   | "reader_unlock";
 
 export type WalletEvent = {
+  /** Author identity: real wallet (MetaMask) or synthetic 0x id for email accounts */
   wallet: string;
   eventType: WalletEventType | string;
   ts: string;
@@ -46,6 +47,7 @@ function coerceIso(input?: string): string {
 }
 
 export async function trackWalletEvent(payload: {
+  /** Real wallet or email-account synthetic address (both are 0x author ids on the server). */
   wallet: string;
   eventType: WalletEventType | string;
   ts?: string;
@@ -119,3 +121,81 @@ export function listRecentDays(params: { days: number; timeZone?: string; now?: 
   return out;
 }
 
+export function computeActiveUserAnalytics(params: {
+  days: string[];
+  events: WalletEvent[];
+  timeZone: string;
+  rangeLabel: string;
+}): {
+  range: string;
+  tz: string;
+  summary: { dau: number; wau: number; mau: number };
+  series: Array<{ date: string; activeUsers: number }>;
+  byEventType: Array<{ eventType: string; users: number; events: number }>;
+} {
+  const { days, events, timeZone: tz, rangeLabel } = params;
+  const byDayUsers = new Map<string, Set<string>>();
+  const byEventType = new Map<string, { users: Set<string>; events: number }>();
+
+  for (const day of days) {
+    byDayUsers.set(day, new Set<string>());
+  }
+
+  for (const ev of events) {
+    const day = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(ev.ts));
+    const set = byDayUsers.get(day);
+    if (set) set.add(ev.wallet);
+
+    const stat = byEventType.get(ev.eventType) ?? {
+      users: new Set<string>(),
+      events: 0,
+    };
+    stat.users.add(ev.wallet);
+    stat.events += 1;
+    byEventType.set(ev.eventType, stat);
+  }
+
+  const today = days[days.length - 1];
+  const last7Days = days.slice(Math.max(0, days.length - 7));
+  const last30Days = days.slice(Math.max(0, days.length - 30));
+
+  const dau = byDayUsers.get(today)?.size ?? 0;
+  const wauSet = new Set<string>();
+  for (const day of last7Days) {
+    for (const uid of byDayUsers.get(day) ?? []) wauSet.add(uid);
+  }
+  const mauSet = new Set<string>();
+  for (const day of last30Days) {
+    for (const uid of byDayUsers.get(day) ?? []) mauSet.add(uid);
+  }
+
+  const series = days.map((day) => ({
+    date: day,
+    activeUsers: byDayUsers.get(day)?.size ?? 0,
+  }));
+
+  const byEventTypeSummary = Array.from(byEventType.entries())
+    .map(([eventType, stat]) => ({
+      eventType,
+      users: stat.users.size,
+      events: stat.events,
+    }))
+    .sort((a, b) => b.events - a.events);
+
+  return {
+    range: rangeLabel,
+    tz,
+    summary: {
+      dau,
+      wau: wauSet.size,
+      mau: mauSet.size,
+    },
+    series,
+    byEventType: byEventTypeSummary,
+  };
+}

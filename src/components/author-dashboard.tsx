@@ -6,9 +6,11 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
+import { PdfSignatureTool } from "@/components/pdf-signature-tool";
 import { SiteLocaleControl } from "@/components/site-locale-control";
 import { WalletConnect } from "@/components/wallet-connect";
 import { WorkspaceAuthGate } from "@/components/workspace-auth-gate";
+import { WorkspaceClaudeChat } from "@/components/workspace-claude-chat";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 import { useSiteLocale } from "@/providers/site-locale-provider";
 import { useAuthStore } from "@/store/auth-store";
@@ -36,7 +38,9 @@ type Tab =
   | "audiobooks"
   | "publish"
   | "video"
+  | "pdfSign"
   | "translation"
+  | "aiChat"
   | "analytics"
   | "tickets"
   | "adminMembers"
@@ -53,7 +57,7 @@ type PublishRow = {
 
 type ArticleUvStats = { uv7: number; uv30: number; today: number };
 
-type ActiveWalletAnalytics = {
+type ActiveUserAnalytics = {
   range: string;
   tz: string;
   summary: {
@@ -63,11 +67,11 @@ type ActiveWalletAnalytics = {
   };
   series: Array<{
     date: string;
-    activeWallets: number;
+    activeUsers: number;
   }>;
   byEventType: Array<{
     eventType: string;
-    wallets: number;
+    users: number;
     events: number;
   }>;
   generatedAt: string;
@@ -375,7 +379,7 @@ export function AuthorDashboard() {
   );
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
-  const [analyticsData, setAnalyticsData] = useState<ActiveWalletAnalytics | null>(
+  const [analyticsData, setAnalyticsData] = useState<ActiveUserAnalytics | null>(
     null,
   );
   const [tickets, setTickets] = useState<TicketItem[]>([]);
@@ -627,19 +631,19 @@ export function AuthorDashboard() {
     setAnalyticsError(null);
     try {
       const res = await fetch(
-        `/api/v1/analytics/active-wallets?range=${encodeURIComponent(analyticsRange)}&groupBy=day&tz=${encodeURIComponent("Asia/Shanghai")}`,
+        `/api/v1/analytics/active-users?range=${encodeURIComponent(analyticsRange)}&groupBy=day&tz=${encodeURIComponent("Asia/Shanghai")}`,
         { cache: "no-store" },
       );
       const data = await readApiJsonSafe<
-        ActiveWalletAnalytics & {
+        ActiveUserAnalytics & {
         error?: string;
         }
       >(res);
-      if (!res.ok) throw new Error(data.error ?? "加载活跃钱包数据失败");
+      if (!res.ok) throw new Error(data.error ?? "加载活跃用户数据失败");
       setAnalyticsData(data);
     } catch (e) {
       setAnalyticsData(null);
-      setAnalyticsError(e instanceof Error ? e.message : "加载活跃钱包数据失败");
+      setAnalyticsError(e instanceof Error ? e.message : "加载活跃用户数据失败");
     } finally {
       setAnalyticsLoading(false);
     }
@@ -2365,6 +2369,17 @@ export function AuthorDashboard() {
           </button>
           <button
             type="button"
+            onClick={() => setTab("pdfSign")}
+            className={
+              tab === "pdfSign"
+                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
+                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
+            }
+          >
+            {t("workspace.tabPdfSign")}
+          </button>
+          <button
+            type="button"
             onClick={() => setTab("settings")}
             className={
               tab === "settings"
@@ -2384,6 +2399,17 @@ export function AuthorDashboard() {
             }
           >
             {t("workspace.tabTranslation")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("aiChat")}
+            className={
+              tab === "aiChat"
+                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
+                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
+            }
+          >
+            {t("workspace.tabAiChat")}
           </button>
           <button
             type="button"
@@ -3068,6 +3094,8 @@ export function AuthorDashboard() {
           </div>
         )}
 
+        {tab === "pdfSign" && <PdfSignatureTool />}
+
         {tab === "translation" && (
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">多语言翻译</h2>
@@ -3498,10 +3526,16 @@ export function AuthorDashboard() {
           </div>
         )}
 
+        {tab === "aiChat" && authorId && (
+          <div className="w-full min-w-0 max-w-5xl space-y-4">
+            <WorkspaceClaudeChat authorId={authorId} />
+          </div>
+        )}
+
         {tab === "analytics" && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold">活跃钱包看板</h2>
+              <h2 className="text-lg font-semibold">活跃用户统计</h2>
               <div className="flex items-center gap-2">
                 <select
                   value={analyticsRange}
@@ -3525,7 +3559,8 @@ export function AuthorDashboard() {
               </div>
             </div>
             <p className="max-w-2xl text-sm text-neutral-600 dark:text-neutral-400">
-              统计口径：按钱包地址去重。DAU=今日，WAU=近 7 天，MAU=近 30 天。
+              统计口径：按作者身份去重，合计 MetaMask 钱包与邮箱密码登录；邮箱账户在服务端对应唯一合成
+              0x 作者 ID，与真实钱包地址使用同一套埋点去重。DAU=今日，WAU=近 7 天，MAU=近 30 天。
             </p>
 
             {analyticsError ? (
@@ -3563,24 +3598,24 @@ export function AuthorDashboard() {
 
                 <div className="rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
                   <p className="mb-3 text-xs font-medium text-zinc-300">
-                    近 {analyticsData.range} 活跃钱包趋势
+                    近 {analyticsData.range} 活跃用户趋势
                   </p>
                   <div className="flex h-44 items-end gap-1 overflow-x-auto rounded-lg border border-[#2a3b57] bg-[#0f1726] p-3">
                     {(() => {
                       const max = Math.max(
-                        ...analyticsData.series.map((x) => x.activeWallets),
+                        ...analyticsData.series.map((x) => x.activeUsers),
                         1,
                       );
                       return analyticsData.series.map((point) => {
                         const h = Math.max(
                           6,
-                          Math.round((point.activeWallets / max) * 120),
+                          Math.round((point.activeUsers / max) * 120),
                         );
                         return (
                           <div
                             key={point.date}
                             className="flex min-w-[18px] flex-col items-center justify-end gap-1"
-                            title={`${point.date}: ${point.activeWallets}`}
+                            title={`${point.date}: ${point.activeUsers}`}
                           >
                             <div
                               className="w-3 rounded-sm bg-gradient-to-t from-cyan-500 to-indigo-400"
@@ -3608,7 +3643,7 @@ export function AuthorDashboard() {
                             {ANALYTICS_EVENT_LABELS_ZH[row.eventType] ?? row.eventType}
                           </span>
                           <span className="text-zinc-500">
-                            钱包 {row.wallets.toLocaleString("zh-CN")} · 事件{" "}
+                            用户 {row.users.toLocaleString("zh-CN")} · 事件{" "}
                             {row.events.toLocaleString("zh-CN")}
                           </span>
                         </li>

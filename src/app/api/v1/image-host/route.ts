@@ -5,6 +5,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { isAddress } from "viem";
 
+import { getLocalDataDir, getLocalDataSubpath } from "@/lib/server/local-data-path";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -93,7 +94,7 @@ async function saveImageBytes(
 ) {
   const month = new Date().toISOString().slice(0, 7).replace("-", "");
   const relDir = path.posix.join("image-bed", authorLower, month);
-  const absDir = path.join(process.cwd(), ".data", relDir);
+  const absDir = getLocalDataSubpath(relDir);
   await fs.mkdir(absDir, { recursive: true });
   const hostedName = makeHostedFileName(fileName);
   const absPath = path.join(absDir, hostedName);
@@ -202,9 +203,10 @@ export async function GET(req: NextRequest) {
   if (parts.length < 3) {
     return badRequest("Invalid path");
   }
-  const dataPath = path.join(process.cwd(), ".data", "image-bed", ...parts);
-  const publicPath = path.join(process.cwd(), "public", "image-bed", ...parts);
-  const root = path.join(process.cwd(), ".data", "image-bed");
+  const tail = path.join(...parts);
+  const dataPath = path.join(getLocalDataDir(), "image-bed", tail);
+  const publicPath = path.join(process.cwd(), "public", "image-bed", tail);
+  const root = path.join(getLocalDataDir(), "image-bed");
   const rel = path.relative(root, dataPath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 404 });

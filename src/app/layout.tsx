@@ -15,7 +15,7 @@ import "./globals.css";
  * 导致样式资源失败并可能影响 Hydration。改用语义清晰的系统/黑体栈（globals.css）。
  */
 export const metadata: Metadata = {
-  title: "Chenchen-Lib · AI writing platform",
+  title: "Babel Tower · AI writing platform",
   description:
     "AI-assisted editor for novels and scripts (MiroFish narrative tools). UI language defaults from IP (e.g. CN → 简体, HK/TW → 繁体) until you choose in the reader AI panel or Account; override with GEO_COUNTRY_OVERRIDE for dev.",
 };

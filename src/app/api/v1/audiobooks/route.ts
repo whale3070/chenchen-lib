@@ -5,6 +5,7 @@ import path from "node:path";
 import { isAddress } from "viem";
 
 import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
+import { getLocalDataSubpath } from "@/lib/server/local-data-path";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -98,7 +99,7 @@ function makeHostedFileName(originalName: string) {
 }
 
 function audiobookIndexPath(authorLower: string) {
-  return path.join(process.cwd(), ".data", "audiobooks", "authors", `${authorLower}.json`);
+  return getLocalDataSubpath("audiobooks", "authors", `${authorLower}.json`);
 }
 
 function getPublicBaseUrl(req: NextRequest): string {
@@ -198,7 +199,7 @@ export async function POST(req: NextRequest) {
   const index = await readIndex(wh.walletLower);
   const month = new Date().toISOString().slice(0, 7).replace("-", "");
   const relDir = path.posix.join("audio-bed", wh.walletLower, month);
-  const absDir = path.join(process.cwd(), ".data", relDir);
+  const absDir = getLocalDataSubpath(relDir);
   await fs.mkdir(absDir, { recursive: true });
   const base = getPublicBaseUrl(req);
 

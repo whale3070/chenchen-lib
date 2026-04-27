@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
+import { getLocalDataDir, getLocalDataSubpath } from "@/lib/server/local-data-path";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -128,7 +129,7 @@ export async function POST(req: NextRequest) {
 
     const month = new Date().toISOString().slice(0, 7).replace("-", "");
     const relDir = path.posix.join("audio-bed", authorLower, month);
-    const absDir = path.join(process.cwd(), ".data", relDir);
+    const absDir = getLocalDataSubpath(relDir);
     await fs.mkdir(absDir, { recursive: true });
 
     const hostedName = makeHostedFileName(item.name || "audio.mp3");
@@ -203,9 +204,10 @@ export async function GET(req: NextRequest) {
     .map(sanitizeSegment);
   if (parts.length < 3) return badRequest("Invalid path");
 
-  const dataPath = path.join(process.cwd(), ".data", "audio-bed", ...parts);
-  const publicPath = path.join(process.cwd(), "public", "audio-bed", ...parts);
-  const root = path.join(process.cwd(), ".data", "audio-bed");
+  const tail = path.join(...parts);
+  const dataPath = path.join(getLocalDataDir(), "audio-bed", tail);
+  const publicPath = path.join(process.cwd(), "public", "audio-bed", tail);
+  const root = path.join(getLocalDataDir(), "audio-bed");
   const rel = path.relative(root, dataPath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 404 });

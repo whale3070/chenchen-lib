@@ -7,11 +7,11 @@ import {
 export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
   en: {
     "landing.navAria": "Intro & guides",
-    "landing.navPitch": "About Chenchen-Lib",
+    "landing.navPitch": "About Babel Tower",
     "landing.navGuide": "Reader guide",
     "landing.heroTitle": "Choose your role · enter the matrix",
     "landing.tagline":
-      "AI-powered creation, multilingual reach | Chenchen-Lib — give every word voice, warmth, and a global echo.",
+      "AI-powered creation, multilingual reach | Babel Tower — give every word voice, warmth, and a global echo.",
     "landing.creatorBadge": "Creator",
     "landing.creatorTitle": "I'm an author",
     "landing.creatorDesc": "AI drafting · characters & outline · narrative simulation",
@@ -20,9 +20,9 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.readerTitle": "I'm a reader",
     "landing.readerDesc": "Library & reading (in development)",
     "landing.readerCta": "Go to library",
-    "landing.aboutTitle": "About Chenchen-Lib",
+    "landing.aboutTitle": "About Babel Tower",
     "landing.aboutP1":
-      "Chenchen-Lib is a next-generation AI-powered creation and reading platform for creators and readers worldwide. It is built around lightweight convenience, intelligent efficiency, and global reach—no complicated setup; sign in quickly with email and password.",
+      "Babel Tower is a next-generation AI-powered creation and reading platform for creators and readers worldwide. It is built around lightweight convenience, intelligent efficiency, and global reach—no complicated setup; sign in quickly with email and password.",
     "landing.aboutP2":
       "We integrate AI-assisted creation, automatic multilingual translation, TTS audiobook generation, and unified audio/video tools so creators can ship quality work without burning out, generate multilingual editions and audiobooks in one click, and reach a global audience—while readers break language barriers, enjoy text or audio, and get a richer, more flexible reading experience.",
     "landing.aboutP3":
@@ -73,10 +73,65 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "workspace.tabPublish": "Publishing",
     "workspace.tabVideo": "Video → MP3",
     "workspace.tabTranslation": "Translation",
-    "workspace.tabAnalytics": "Active wallets",
+    "workspace.tabAnalytics": "Active users",
     "workspace.tabTickets": "Tickets",
     "workspace.tabAdminMembers": "VIP admin",
     "workspace.tabSettings": "Account",
+    "workspace.tabAiChat": "AI chat (Claude)",
+    "workspace.tabPdfSign": "PDF + signature",
+
+    "workspace.pdfSignTitle": "PDF signature overlay",
+    "workspace.pdfSignBlurb":
+      "Pick a PDF and a PNG signature. Preview the page, drag and resize the box, then download a merged PDF. Processing stays in your browser.",
+    "workspace.pdfSignPickPdf": "Choose PDF",
+    "workspace.pdfSignPickPng": "Choose PNG signature",
+    "workspace.pdfSignPageLabel": "Page",
+    "workspace.pdfSignDownload": "Download merged PDF",
+    "workspace.pdfSignBusy": "Generating…",
+    "workspace.pdfSignRendering": "Rendering preview…",
+    "workspace.pdfSignHintDrag":
+      "Drag the signature to move it; use the corner handles to resize. The result matches this preview.",
+    "workspace.pdfSignPdfLoadError": "Could not open this PDF.",
+    "workspace.pdfSignPdfOnly": "Please choose a .pdf file.",
+    "workspace.pdfSignPngOnly": "Signature must be PNG.",
+    "workspace.pdfSignRenderError": "Could not render the PDF preview.",
+    "workspace.pdfSignPageMissing": "That page does not exist in the PDF.",
+    "workspace.pdfSignMergeError": "Could not build the signed PDF.",
+
+    "workspace.aiChatTitle": "AI chat (Claude)",
+    "workspace.aiChatBlurb":
+      "Messages are sent through the server to your configured LLM. Conversation threads are saved in this browser only (same site URL = same storage). Use Export backup to save JSON before clearing data or switching machines.",
+    "workspace.aiChatNewThread": "New chat",
+    "workspace.aiChatDeleteThread": "Delete this chat",
+    "workspace.aiChatClearAllThreads": "Delete all chats",
+    "workspace.aiChatExportBackup": "Export backup (JSON)",
+    "workspace.aiChatImportBackup": "Import backup",
+    "workspace.aiChatImportError":
+      "Could not read this file. Choose a JSON backup exported from this chat panel (same format).",
+    "workspace.aiChatThreads": "Chats",
+    "workspace.aiChatEmptyThread": "No messages yet. Ask anything below.",
+    "workspace.aiChatPlaceholder": "Type a message…",
+    "workspace.aiChatSend": "Send",
+    "workspace.aiChatWaiting": "Waiting for reply…",
+    "workspace.aiChatError": "Error",
+    "workspace.aiChatClearInput": "Clear",
+    "workspace.aiChatUnconfigured": "Claude is not configured (set CLAUDE_URL and CLAUDE_API on the server).",
+    "workspace.aiChatModel": "Model",
+    "workspace.aiChatModelSwitch": "Active model",
+    "workspace.aiChatRefreshConfig": "Refresh status",
+    "workspace.aiChatEnterFullscreen": "Full screen",
+    "workspace.aiChatExitFullscreen": "Exit full screen",
+    "workspace.aiChatConfirmDeleteThread":
+      "Delete this chat and its messages? This cannot be undone.",
+    "workspace.aiChatCorruptTitle": "Saved chats could not be read",
+    "workspace.aiChatCorruptBlurb":
+      "Your browser still has a backup in Local Storage, but this version could not parse it (upgrade or corrupted JSON). To avoid wiping that backup, automatic save is paused. Use Export backup now to download the raw Local Storage value, or copy the key from DevTools (Application → Local Storage), then use the button below to reset.",
+    "workspace.aiChatCorruptReason": "Parse detail",
+    "workspace.aiChatCorruptClearCta": "Delete broken backup and resume saving",
+    "workspace.aiChatConfirmClearAll":
+      "Delete all saved chats on this device? This cannot be undone.",
+    "workspace.aiChatRoleUser": "You",
+    "workspace.aiChatRoleAssistant": "Assistant",
 
     "settings.title": "Account settings",
     "settings.blurb":
@@ -129,11 +184,11 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
   },
   "zh-CN": {
     "landing.navAria": "项目介绍与使用指南",
-    "landing.navPitch": "郴郴文库介绍",
+    "landing.navPitch": "巴别塔介绍",
     "landing.navGuide": "使用方法指南",
     "landing.heroTitle": "选择你的身份 · 进入矩阵",
     "landing.tagline":
-      "AI赋能创作，多语连接世界 | Chenchen-Lib，让每一段文字都有声音、有温度、有全球回响",
+      "AI赋能创作，多语连接世界 | 巴别塔（Babel Tower），让每一段文字都有声音、有温度、有全球回响",
     "landing.creatorBadge": "Creator",
     "landing.creatorTitle": "我是作者",
     "landing.creatorDesc": "AI 稿面 · 角色与大纲 · 叙事推演",
@@ -142,9 +197,9 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.readerTitle": "我是读者",
     "landing.readerDesc": "书库与阅读体验（开发中）",
     "landing.readerCta": "前往书库",
-    "landing.aboutTitle": "关于 Chenchen-Lib",
+    "landing.aboutTitle": "关于巴别塔",
     "landing.aboutP1":
-      "Chenchen-Lib 是一款面向全球创作者与读者的下一代 AI 创作阅读平台，以「轻量便捷、智能高效、全球可达」为核心，无需复杂操作，邮箱密码即可快速登录。",
+      "巴别塔（Babel Tower）是一款面向全球创作者与读者的下一代 AI 创作阅读平台，以「轻量便捷、智能高效、全球可达」为核心，无需复杂操作，邮箱密码即可快速登录。",
     "landing.aboutP2":
       "我们整合 AI 辅助创作、多语言自动翻译、TTS 有声书生成、音视频一体化工具，让创作者无需耗费大量精力，就能快速产出优质内容、一键生成多语言版本与有声书，轻松实现全球分发；让读者打破语言壁垒，既能读文字、也能听内容，享受更灵活、更丰富的阅读体验。",
     "landing.aboutP3":
@@ -194,10 +249,62 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "workspace.tabPublish": "发布管理",
     "workspace.tabVideo": "视频管理",
     "workspace.tabTranslation": "多语言翻译",
-    "workspace.tabAnalytics": "活跃钱包看板",
+    "workspace.tabAnalytics": "活跃用户统计",
     "workspace.tabTickets": "工单管理",
     "workspace.tabAdminMembers": "会员管理",
     "workspace.tabSettings": "账户设置",
+    "workspace.tabAiChat": "AI 聊天（Claude）",
+    "workspace.tabPdfSign": "PDF 签名",
+
+    "workspace.pdfSignTitle": "PDF 叠加签名",
+    "workspace.pdfSignBlurb":
+      "选择 PDF 与 PNG 签名图；在预览上拖动、缩放签名框，再下载合成后的 PDF。文件仅在浏览器本地处理，不上传服务器。",
+    "workspace.pdfSignPickPdf": "选择 PDF",
+    "workspace.pdfSignPickPng": "选择 PNG 签名",
+    "workspace.pdfSignPageLabel": "页码",
+    "workspace.pdfSignDownload": "下载合成 PDF",
+    "workspace.pdfSignBusy": "正在生成…",
+    "workspace.pdfSignRendering": "正在渲染预览…",
+    "workspace.pdfSignHintDrag":
+      "拖动签名框移动位置，拖四角调整大小；导出效果与预览一致。",
+    "workspace.pdfSignPdfLoadError": "无法打开该 PDF。",
+    "workspace.pdfSignPdfOnly": "请选择 .pdf 文件。",
+    "workspace.pdfSignPngOnly": "签名图请使用 PNG。",
+    "workspace.pdfSignRenderError": "无法渲染 PDF 预览。",
+    "workspace.pdfSignPageMissing": "PDF 中不存在该页。",
+    "workspace.pdfSignMergeError": "合成 PDF 失败。",
+
+    "workspace.aiChatTitle": "AI 聊天（Claude）",
+    "workspace.aiChatBlurb":
+      "消息经服务器转发至已配置的 LLM。对话按会话保存在本机浏览器（同一站点地址才共用存储）；清除站点数据会丢失。部署或换域名前可用「导出备份」保存 JSON，之后可用「导入备份」恢复。",
+    "workspace.aiChatNewThread": "新对话",
+    "workspace.aiChatDeleteThread": "删除当前对话",
+    "workspace.aiChatClearAllThreads": "删除全部对话",
+    "workspace.aiChatExportBackup": "导出备份（JSON）",
+    "workspace.aiChatImportBackup": "导入备份",
+    "workspace.aiChatImportError": "无法读取该文件。请选择本面板导出的 JSON 备份（格式一致）。",
+    "workspace.aiChatThreads": "历史对话",
+    "workspace.aiChatEmptyThread": "暂无消息，在下方输入后开始对话。",
+    "workspace.aiChatPlaceholder": "输入消息…",
+    "workspace.aiChatSend": "发送",
+    "workspace.aiChatWaiting": "等待回复中…",
+    "workspace.aiChatError": "错误",
+    "workspace.aiChatClearInput": "清空输入",
+    "workspace.aiChatUnconfigured": "未配置 Claude：请在服务器环境变量中设置 CLAUDE_URL 与 CLAUDE_API。",
+    "workspace.aiChatModel": "当前模型",
+    "workspace.aiChatModelSwitch": "使用模型",
+    "workspace.aiChatRefreshConfig": "刷新状态",
+    "workspace.aiChatEnterFullscreen": "全屏",
+    "workspace.aiChatExitFullscreen": "退出全屏",
+    "workspace.aiChatConfirmDeleteThread": "确定删除当前对话及全部消息？此操作不可恢复。",
+    "workspace.aiChatCorruptTitle": "无法读取已保存的聊天记录",
+    "workspace.aiChatCorruptBlurb":
+      "浏览器 Local Storage 里仍有备份，但当前版本解析失败（可能因升级或数据损坏）。为避免覆盖该备份，已暂停写入本机。请先点「导出备份」下载当前键的原文（文件名含 RAW），或自行在开发者工具 Application → Local Storage 中复制；再决定是否点下方按钮清除并恢复保存。",
+    "workspace.aiChatCorruptReason": "解析原因",
+    "workspace.aiChatCorruptClearCta": "删除损坏备份并恢复自动保存",
+    "workspace.aiChatConfirmClearAll": "确定删除本机保存的全部对话？此操作不可恢复。",
+    "workspace.aiChatRoleUser": "我",
+    "workspace.aiChatRoleAssistant": "助手",
 
     "settings.title": "账户设置",
     "settings.blurb":

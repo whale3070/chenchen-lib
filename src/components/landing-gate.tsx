@@ -92,7 +92,7 @@ export function LandingGate() {
 
       <main className="relative z-10 mx-auto flex w-full max-w-5xl flex-1 flex-col items-center px-6 py-16">
         <p className="mb-3 text-center text-[11px] font-medium uppercase tracking-[0.35em] text-cyan-400/80">
-          Chenchen-Lib
+          Babel Tower
         </p>
         <nav
           className="mb-8 flex flex-wrap items-center justify-center gap-3"

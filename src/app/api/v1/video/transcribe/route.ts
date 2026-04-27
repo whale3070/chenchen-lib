@@ -5,6 +5,7 @@ import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { isAddress } from "viem";
 
 import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
+import { getLocalDataDir } from "@/lib/server/local-data-path";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -67,7 +68,7 @@ function sanitizeSegment(seg: string) {
 }
 
 function indexPath(authorLower: string) {
-  return path.join(process.cwd(), ".data", "video-extracts", `${authorLower}.json`);
+  return path.join(getLocalDataDir(), "video-extracts", `${authorLower}.json`);
 }
 
 async function readIndex(authorLower: string): Promise<VideoExtractIndex> {
@@ -106,8 +107,9 @@ function resolveHostedMp3AbsPath(
     return { ok: false, message: "仅支持对已提取的 MP3 转写" };
   }
 
-  const dataPath = path.join(process.cwd(), ".data", "audio-bed", ...parts);
-  const root = path.join(process.cwd(), ".data", "audio-bed");
+  const tail = path.join(...parts);
+  const dataPath = path.join(getLocalDataDir(), "audio-bed", tail);
+  const root = path.join(getLocalDataDir(), "audio-bed");
   const rel = path.relative(root, dataPath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return { ok: false, message: "无效的音频路径" };

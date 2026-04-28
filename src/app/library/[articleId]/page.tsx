@@ -42,6 +42,34 @@ function visitedKey(articleId: string) {
   return `chenchen:reader:visited:${articleId}`;
 }
 
+function lastChapterKey(articleId: string, lang: string) {
+  return `chenchen:reader:lastChapter:${articleId}:${lang}`;
+}
+
+function clampChapterIndex(index: number, chapterCount: number): number {
+  if (chapterCount <= 0) return 0;
+  if (!Number.isFinite(index)) return 0;
+  const i = Math.trunc(index);
+  return Math.max(0, Math.min(i, chapterCount - 1));
+}
+
+function readLastChapterIndexFromStorage(
+  articleId: string,
+  lang: string,
+  chapterCount: number,
+): number {
+  if (chapterCount <= 0) return 0;
+  try {
+    const raw = window.localStorage.getItem(lastChapterKey(articleId, lang));
+    if (raw == null || raw === "") return 0;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isInteger(parsed) || parsed < 0) return 0;
+    return clampChapterIndex(parsed, chapterCount);
+  } catch {
+    return 0;
+  }
+}
+
 function chapterTocLabel(index: number, rawTitle?: string) {
   const base = `第 ${index + 1} 章`;
   const title = (rawTitle ?? "").trim();
@@ -310,9 +338,14 @@ export default function ReaderArticlePage({
             throw new Error(data.error ?? "加载失败");
           }
           setArticle(data.article);
-          setChapterIndex(0);
+          setChapterIndex(
+            readLastChapterIndexFromStorage(
+              articleId,
+              langParam,
+              data.article.chapters.length,
+            ),
+          );
           setShowTipQr(false);
-          setVisitedChapterIndexes(new Set([0]));
           loaded = true;
           break;
         } catch (e) {
@@ -850,6 +883,25 @@ export default function ReaderArticlePage({
       // ignore storage write errors
     }
   }, [articleId, visitedChapterIndexes]);
+
+  useEffect(() => {
+    if (!article?.articleId) return;
+    const n = article.chapters.length;
+    if (n === 0) return;
+    const safe = clampChapterIndex(chapterIndex, n);
+    if (safe !== chapterIndex) {
+      setChapterIndex(safe);
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        lastChapterKey(article.articleId, langParam),
+        String(safe),
+      );
+    } catch {
+      // ignore storage write errors
+    }
+  }, [article?.articleId, article?.chapters.length, chapterIndex, langParam]);
 
   useEffect(() => {
     if (!article) return;

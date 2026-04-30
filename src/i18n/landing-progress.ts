@@ -6,6 +6,25 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 4 月 28 日（第三十一天）",
+    title: "开发进度",
+    items: [
+      "【bug 修复】读者页：读到第 3 章时刷新会回到第 1 章的问题已修复。",
+      "新增共享的章节登场人物抽取辅助函数；在「大开本」阅读页与主编台大纲侧栏加入「一键全书」批量抽取。",
+      "账户设置中支持切换翻译等所用模型。",
+      "【bug 修复】多语言翻译：选中第 3 章却实际翻译第 2 章内容的问题已修复（按章节翻译时不再错误回退到草稿/全书正文）。",
+    ],
+  },
+  {
+    dateLabel: "2026 年 4 月 27 日（第三十天）",
+    title: "开发进度",
+    items: [
+      "站点由 HTTP 切换为 HTTPS。",
+      "作者工作台新增「PDF 签名」功能：选择 PDF 与 PNG 签名图；在预览上拖动、缩放签名框，再下载合成后的 PDF。文件仅在浏览器本地处理，不上传服务器。",
+      "首页与路演等品牌文案：将「郴郴文库」更名为「巴别塔」；英文站点名为 babel towel（域名 babeltowel.com）。",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 26 日（第二十九天）",
     title: "开发进度",
     items: [
@@ -202,6 +221,25 @@ const ZH: ProgressStage[] = [
 ];
 
 const EN: ProgressStage[] = [
+  {
+    dateLabel: "April 28, 2026 (day 31)",
+    title: "Progress",
+    items: [
+      "Bug fix: reader page no longer jumps back to chapter 1 after a refresh while reading chapter 3.",
+      "Shared helpers to extract character appearances per chapter; “one-click whole book” batch extraction added on the large-format reader page and the author outline sidebar.",
+      "Account settings: choose/switch the model used for translation and related tasks.",
+      "Bug fix: multilingual translation could translate chapter 2 when chapter 3 was selected—fixed by removing incorrect fallbacks to draft / full-book text when translating a single chapter.",
+    ],
+  },
+  {
+    dateLabel: "April 27, 2026 (day 30)",
+    title: "Progress",
+    items: [
+      "Switched the site from HTTP to HTTPS.",
+      "Workspace PDF signature: choose a PDF and a PNG signature; drag and resize the box on the preview, then download a merged PDF. Processing stays entirely in the browser—nothing is uploaded to the server.",
+      "Landing and pitch-deck branding: renamed the Chinese name from 郴郴文库 to 巴别塔; English site label updated to babel towel (domain babeltowel.com).",
+    ],
+  },
   {
     dateLabel: "April 26, 2026 (day 29)",
     title: "Progress",

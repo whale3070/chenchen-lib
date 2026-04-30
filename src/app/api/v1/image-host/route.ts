@@ -5,7 +5,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { isAddress } from "viem";
 
-import { getLocalDataDir, getLocalDataSubpath } from "@/lib/server/local-data-path";
+import { getLocalDataSubpath } from "@/lib/server/local-data-path";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -203,10 +203,10 @@ export async function GET(req: NextRequest) {
   if (parts.length < 3) {
     return badRequest("Invalid path");
   }
-  const tail = path.join(...parts);
-  const dataPath = path.join(getLocalDataDir(), "image-bed", tail);
-  const publicPath = path.join(process.cwd(), "public", "image-bed", tail);
-  const root = path.join(getLocalDataDir(), "image-bed");
+  const tailPosix = parts.join("/");
+  const dataPath = getLocalDataSubpath(`image-bed/${tailPosix}`);
+  const publicPath = path.join(process.cwd(), "public", "image-bed", ...parts);
+  const root = getLocalDataSubpath("image-bed");
   const rel = path.relative(root, dataPath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 404 });

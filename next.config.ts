@@ -34,6 +34,10 @@ loadEnvConfig(repoRoot);
  * 浏览器里 CSP「unsafe-eval」类提示多见于开发模式或扩展；生产构建一般不需要在 CSP 中放行 eval。
  */
 const nextConfig: NextConfig = {
+  /** 运行时写入的本地数据，勿纳入输出文件追踪（否则 Turbopack 对 `.data/**` 过宽告警） */
+  outputFileTracingExcludes: {
+    "*": ["**/.data/**"],
+  },
   allowedDevOrigins: ["whale3070.com", "localhost", "127.0.0.1"],
   /**
    * 仅生产构建需要：把追踪根设到仓库根，便于 serverless 打包到 `shared/` 等目录的资源。
@@ -48,6 +52,21 @@ const nextConfig: NextConfig = {
     resolveAlias: {
       tailwindcss: tailwindcssPkgDir,
     },
+    /**
+     * 本地 `.data/chapter-casts/**` 下可能上万 JSON；Turbopack 对 `fs`+`path.join` 的静态分析会报
+     *「Overly broad patterns」。该模块仅为运行时读写，与模块图无关。
+     * @see https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopackIgnoreIssue
+     */
+    ignoreIssue: [
+      {
+        path: "**/lib/server/chapter-cast-storage.ts",
+        description: /Overly broad patterns/,
+      },
+      {
+        path: "**/next.config.ts",
+        description: /unexpected file in NFT list/i,
+      },
+    ],
   },
 };
 

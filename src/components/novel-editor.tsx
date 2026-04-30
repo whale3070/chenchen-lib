@@ -48,6 +48,10 @@ import {
   type ChapterizeTxtMode,
 } from "@/lib/txt-import-chapterize";
 import { resolveParentForNewChapter } from "@/lib/plot-outline";
+import {
+  chapterHasCastExtract,
+  postChapterCastExtract,
+} from "@/lib/chapter-cast-extract-flow";
 import { createEmptyPersona } from "@/lib/persona-factory";
 import {
   applySelectionToEditor,
@@ -1053,6 +1057,8 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
   const [paymentQrSaving, setPaymentQrSaving] = useState(false);
   const [chapterPublishSubmitting, setChapterPublishSubmitting] = useState(false);
   const [chapterCastLoading, setChapterCastLoading] = useState(false);
+  const [chapterCastBatchLoading, setChapterCastBatchLoading] = useState(false);
+  const [chapterCastBatchProgress, setChapterCastBatchProgress] = useState("");
   const [chapterCastRefreshKey, setChapterCastRefreshKey] = useState(0);
   const [firstLineIndentEnabled, setFirstLineIndentEnabled] = useState(false);
   const markdownEditorPopupRef = useRef<Window | null>(null);
@@ -2178,38 +2184,21 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
     }
     setChapterCastLoading(true);
     try {
-      const r = await fetch("/api/v1/chapter-cast/extract", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-wallet-address": authorId,
-        },
-        body: JSON.stringify({
-          authorId,
-          novelId,
-          chapterId: activeChapterId,
-          chapterIndex,
-          chapterHtml,
-        }),
+      const res = await postChapterCastExtract({
+        authorId,
+        novelId,
+        chapterId: activeChapterId,
+        chapterIndex,
+        chapterHtml,
       });
-      const data = (await r.json()) as {
-        ok?: boolean;
-        version?: string;
-        files?: string[];
-        count?: number;
-        error?: string;
-        code?: string;
-      };
-      if (!r.ok) {
-        if (r.status === 403 && data.code === "subscription_required") {
-          window.alert(data.error ?? "需要付费会员订阅后方可使用此 AI 功能。");
+      if (!res.ok) {
+        if (res.status === 403 && res.code === "subscription_required") {
+          window.alert(res.error ?? "需要付费会员订阅后方可使用此 AI 功能。");
           return;
         }
-        throw new Error(data.error ?? `HTTP ${r.status}`);
+        throw new Error(res.error);
       }
-      window.alert(
-        `已写入 ${data.count ?? 0} 个 JSON（${data.version ?? ""}）`,
-      );
+      window.alert(`已写入 ${res.count} 个 JSON（${res.version}）`);
       setChapterCastRefreshKey((k) => k + 1);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "抽取失败");
@@ -2217,6 +2206,83 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
       setChapterCastLoading(false);
     }
   }, [authorId, novelId, activeChapterId, outlineNodes]);
+
+  const handleExtractAllChapterCasts = useCallback(async () => {
+    if (!authorId || !novelId) {
+      window.alert("请先连接钱包。");
+      return;
+    }
+    const ed = editorInstanceRef.current;
+    let nodes = outlineNodesRef.current;
+    if (ed && !ed.isDestroyed && activeChapterId) {
+      nodes = upsertChapterBodyFromTipTapHtml(nodes, activeChapterId, ed.getHTML());
+      setOutlineNodes(nodes);
+    }
+    const chapterList = nodes.filter((n) => n.kind === "chapter");
+    if (chapterList.length === 0) {
+      window.alert("当前没有章节。");
+      return;
+    }
+    if (
+      !window.confirm(
+        `将按顺序检查全书 ${chapterList.length} 章：已有抽取结果的章节会跳过；无正文的章节会跳过；其余逐章调用 AI。可能较耗时，是否继续？`,
+      )
+    ) {
+      return;
+    }
+    setChapterCastBatchLoading(true);
+    setChapterCastBatchProgress("");
+    let skipped = 0;
+    let extracted = 0;
+    let emptyBody = 0;
+    try {
+      for (let i = 0; i < chapterList.length; i++) {
+        const ch = chapterList[i]!;
+        const chapterIndex = i + 1;
+        setChapterCastBatchProgress(`第 ${chapterIndex}/${chapterList.length} 章…`);
+        const has = await chapterHasCastExtract(authorId, novelId, ch.id);
+        if (has) {
+          skipped += 1;
+          continue;
+        }
+        const bodySource = chapterBodySourceFromNode(ch);
+        const html =
+          bodySource === "markdown"
+            ? chapterCanonicalBodyHtml(ch)
+            : chapterHtmlFromNode(ch) ?? "";
+        if (!html.trim()) {
+          emptyBody += 1;
+          continue;
+        }
+        const res = await postChapterCastExtract({
+          authorId,
+          novelId,
+          chapterId: ch.id,
+          chapterIndex,
+          chapterHtml: html,
+        });
+        if (!res.ok) {
+          if (res.status === 403 && res.code === "subscription_required") {
+            window.alert(res.error);
+            break;
+          }
+          throw new Error(
+            `第 ${chapterIndex} 章（${ch.title || ch.id}）：${res.error}`,
+          );
+        }
+        extracted += 1;
+      }
+      setChapterCastRefreshKey((k) => k + 1);
+      window.alert(
+        `全书扫描完成。\n跳过（已有抽取）：${skipped} 章\n新抽取：${extracted} 章\n无正文跳过：${emptyBody} 章`,
+      );
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "批量抽取失败");
+    } finally {
+      setChapterCastBatchLoading(false);
+      setChapterCastBatchProgress("");
+    }
+  }, [authorId, novelId, activeChapterId, setOutlineNodes]);
 
   const handlePersonasUpdateFromAi = useCallback(
     (next: Persona[]) => {
@@ -3484,7 +3550,19 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           onChapterCastExtract={handleExtractChapterCast}
           chapterCastExtracting={chapterCastLoading}
           chapterCastExtractDisabled={
-            !authorId || !activeChapterId || chapterCastLoading
+            !authorId ||
+            !activeChapterId ||
+            chapterCastLoading ||
+            chapterCastBatchLoading
+          }
+          onChapterCastExtractAll={handleExtractAllChapterCasts}
+          chapterCastBatchExtracting={chapterCastBatchLoading}
+          chapterCastBatchProgress={chapterCastBatchProgress}
+          chapterCastExtractAllDisabled={
+            !authorId ||
+            chapterCastLoading ||
+            chapterCastBatchLoading ||
+            chapterNodes.length === 0
           }
         />
       ) : (
@@ -3592,7 +3670,11 @@ export function NovelEditorWorkspace({ novelId }: NovelEditorWorkspaceProps) {
           <div>
             <div className="mb-0.5 flex flex-wrap items-center gap-2">
               <Link
-                href="/workspace"
+                href={
+                  searchParams.get("translationPairKey")
+                    ? "/workspace?tab=translation"
+                    : "/workspace"
+                }
                 className="text-[11px] font-medium text-neutral-500 underline-offset-4 hover:text-neutral-800 hover:underline dark:text-neutral-400 dark:hover:text-neutral-200"
               >
                 ← 工作台

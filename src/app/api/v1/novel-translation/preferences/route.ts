@@ -1,19 +1,20 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-
 import { isAddress } from "viem";
 
-import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
+import {
+  canonicalTranslationPreferenceValue,
+  getTranslationModelOptions,
+  isValidTranslationPreferenceValue,
+  normalizeTranslationPreferenceInput,
+  resolveTranslationBackend,
+} from "@/lib/novel-translation-models";
+import {
+  readTranslationPreferencesData,
+  writeTranslationPreferencesData,
+  normalizeLangList,
+} from "@/lib/server/translation-preferences-store";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
-
-type TranslationPreferences = {
-  authorId: string;
-  preferredLanguages: string[];
-  defaultTargetLanguage: string;
-  updatedAt: string;
-};
 
 function unauthorized(message: string) {
   return NextResponse.json({ error: message }, { status: 401 });
@@ -31,15 +32,6 @@ function safeAuthorId(id: string) {
   return id.toLowerCase();
 }
 
-function preferencesPath(authorLower: string) {
-  return path.join(
-    process.cwd(),
-    ".data",
-    "translation-preferences",
-    `${authorLower}.json`,
-  );
-}
-
 function parseWalletHeader(req: NextRequest):
   | { ok: true; walletLower: string }
   | { ok: false; res: NextResponse } {
@@ -48,51 +40,6 @@ function parseWalletHeader(req: NextRequest):
     return { ok: false, res: unauthorized("缺少或无效的 x-wallet-address") };
   }
   return { ok: true, walletLower: safeAuthorId(headerAddr) };
-}
-
-function normalizeLangList(input: unknown): string[] {
-  if (!Array.isArray(input)) return [];
-  const out = input
-    .filter((x): x is string => typeof x === "string")
-    .map((x) => x.trim().toLowerCase())
-    .filter(Boolean);
-  return Array.from(new Set(out)).slice(0, 8);
-}
-
-async function readPreferences(authorLower: string): Promise<TranslationPreferences | null> {
-  const fp = preferencesPath(authorLower);
-  try {
-    const raw = await fs.readFile(fp, "utf8");
-    const data = parseLeadingJsonValue(raw) as Partial<TranslationPreferences>;
-    const preferredLanguages = normalizeLangList(data.preferredLanguages);
-    const defaultTargetLanguage =
-      typeof data.defaultTargetLanguage === "string"
-        ? data.defaultTargetLanguage.trim().toLowerCase()
-        : "";
-    return {
-      authorId: authorLower,
-      preferredLanguages,
-      defaultTargetLanguage:
-        defaultTargetLanguage || preferredLanguages[0] || "en",
-      updatedAt:
-        typeof data.updatedAt === "string"
-          ? data.updatedAt
-          : new Date().toISOString(),
-    };
-  } catch (e: unknown) {
-    const code =
-      e && typeof e === "object" && "code" in e
-        ? (e as NodeJS.ErrnoException).code
-        : undefined;
-    if (code === "ENOENT") return null;
-    throw e;
-  }
-}
-
-async function writePreferences(data: TranslationPreferences) {
-  const fp = preferencesPath(data.authorId);
-  await fs.mkdir(path.dirname(fp), { recursive: true });
-  await fs.writeFile(fp, JSON.stringify(data, null, 2), "utf8");
 }
 
 export async function GET(req: NextRequest) {
@@ -105,10 +52,16 @@ export async function GET(req: NextRequest) {
     return forbidden("authorId 必须与 x-wallet-address 一致");
   }
 
-  const prefs = await readPreferences(wh.walletLower);
+  const prefs = await readTranslationPreferencesData(wh.walletLower);
+  const translationModelOptions = getTranslationModelOptions();
+  const backend = resolveTranslationBackend(prefs?.translationModel ?? null);
+  const translationModel = canonicalTranslationPreferenceValue(backend);
   return NextResponse.json({
     preferredLanguages: prefs?.preferredLanguages ?? ["en", "ja"],
     defaultTargetLanguage: prefs?.defaultTargetLanguage ?? "en",
+    translationModel,
+    modelChoices: translationModelOptions.map((o) => o.value),
+    translationModelOptions,
   });
 }
 
@@ -136,18 +89,39 @@ export async function POST(req: NextRequest) {
     typeof o.defaultTargetLanguage === "string"
       ? o.defaultTargetLanguage.trim().toLowerCase()
       : "";
-  const payload: TranslationPreferences = {
+  const existing = await readTranslationPreferencesData(wh.walletLower);
+
+  const incomingPref = normalizeTranslationPreferenceInput(o.translationModel);
+  let translationModel: string;
+  if (incomingPref && isValidTranslationPreferenceValue(incomingPref)) {
+    translationModel = incomingPref;
+  } else if (
+    existing?.translationModel &&
+    isValidTranslationPreferenceValue(existing.translationModel)
+  ) {
+    translationModel = existing.translationModel;
+  } else {
+    const b = resolveTranslationBackend(null);
+    translationModel = canonicalTranslationPreferenceValue(b);
+  }
+
+  const payload = {
     authorId: wh.walletLower,
     preferredLanguages,
     defaultTargetLanguage:
       defaultTargetLanguage || preferredLanguages[0] || "en",
+    translationModel,
     updatedAt: new Date().toISOString(),
   };
-  await writePreferences(payload);
+  await writeTranslationPreferencesData(payload);
 
+  const translationModelOptions = getTranslationModelOptions();
   return NextResponse.json({
     ok: true,
     preferredLanguages: payload.preferredLanguages,
     defaultTargetLanguage: payload.defaultTargetLanguage,
+    translationModel: payload.translationModel,
+    modelChoices: translationModelOptions.map((o) => o.value),
+    translationModelOptions,
   });
 }

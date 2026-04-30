@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
+
 /** 与 `app/api/v1/chapter-content/route.ts` 落盘 JSON 形状一致 */
 export type ChapterContentDiskPayload = {
   chapterId: string;
@@ -29,6 +31,33 @@ export function chapterContentFilePath(
   const dir = path.join(cwd, ".data", "chapter-content", `${authorLower.toLowerCase()}_${safeDoc}`);
   const safeCh = safeChapterContentSegment(chapterId, 120);
   return path.join(dir, `${safeCh}.json`);
+}
+
+/**
+ * 读取单章侧车 JSON（`.data/chapter-content/...`）。不存在则返回 null。
+ * 与主编台「大纲保存会剥离 metadata 正文、正文在 chapter-content」的模型一致。
+ */
+export async function readChapterContentPayloadFromDisk(params: {
+  cwd?: string;
+  authorLower: string;
+  novelId: string;
+  chapterId: string;
+}): Promise<ChapterContentDiskPayload | null> {
+  const cwd = params.cwd ?? process.cwd();
+  const fp = chapterContentFilePath(cwd, params.authorLower, params.novelId, params.chapterId);
+  try {
+    const raw = await fs.readFile(fp, "utf8");
+    const parsed = parseLeadingJsonValue(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed as ChapterContentDiskPayload;
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT") return null;
+    throw e;
+  }
 }
 
 /**

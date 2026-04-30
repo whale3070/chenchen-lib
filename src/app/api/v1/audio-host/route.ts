@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { isAddress } from "viem";
 
-import { getLocalDataDir, getLocalDataSubpath } from "@/lib/server/local-data-path";
+import { getLocalDataSubpath } from "@/lib/server/local-data-path";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -204,10 +204,10 @@ export async function GET(req: NextRequest) {
     .map(sanitizeSegment);
   if (parts.length < 3) return badRequest("Invalid path");
 
-  const tail = path.join(...parts);
-  const dataPath = path.join(getLocalDataDir(), "audio-bed", tail);
-  const publicPath = path.join(process.cwd(), "public", "audio-bed", tail);
-  const root = path.join(getLocalDataDir(), "audio-bed");
+  const tailPosix = parts.join("/");
+  const dataPath = getLocalDataSubpath(`audio-bed/${tailPosix}`);
+  const publicPath = path.join(process.cwd(), "public", "audio-bed", ...parts);
+  const root = getLocalDataSubpath("audio-bed");
   const rel = path.relative(root, dataPath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 404 });

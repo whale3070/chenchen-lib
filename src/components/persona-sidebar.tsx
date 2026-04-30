@@ -20,6 +20,10 @@ type Props = {
   onChapterCastExtract: () => void | Promise<void>;
   chapterCastExtracting: boolean;
   chapterCastExtractDisabled: boolean;
+  onChapterCastExtractAll?: () => void | Promise<void>;
+  chapterCastBatchExtracting?: boolean;
+  chapterCastBatchProgress?: string;
+  chapterCastExtractAllDisabled?: boolean;
 };
 
 export function PersonaSidebar({
@@ -36,6 +40,10 @@ export function PersonaSidebar({
   onChapterCastExtract,
   chapterCastExtracting,
   chapterCastExtractDisabled,
+  onChapterCastExtractAll,
+  chapterCastBatchExtracting = false,
+  chapterCastBatchProgress = "",
+  chapterCastExtractAllDisabled = false,
 }: Props) {
   return (
     <aside className="flex min-h-0 w-[22rem] shrink-0 flex-col border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 sm:w-96">
@@ -163,6 +171,10 @@ export function PersonaSidebar({
           onExtract={onChapterCastExtract}
           extractDisabled={chapterCastExtractDisabled}
           extractLoading={chapterCastExtracting}
+          onExtractAll={onChapterCastExtractAll}
+          extractAllDisabled={chapterCastExtractAllDisabled}
+          extractAllLoading={chapterCastBatchExtracting}
+          extractAllProgress={chapterCastBatchProgress}
         />
       </div>
     </aside>

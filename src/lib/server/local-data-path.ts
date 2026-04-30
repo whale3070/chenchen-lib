@@ -1,15 +1,22 @@
 import path from "node:path";
 
 /**
- * 统一生成 `process.cwd()/.data` 下的绝对路径，避免在多个 API 里写
- * `path.join(process.cwd(), ".data", …, ...dynamicParts)` 的变参展开；
- * 后者会让 Turbopack 在 build 时把 `.data` 下大量文件算进「过宽」的依赖图并告警。
+ * 本地数据目录 `process.cwd()/.data`。
+ * 构建时避免使用 `path.join(process.cwd(), ".data", …动态段)`：Turbopack 会把其推断为对
+ * `.data/**` 的过宽文件依赖并告警；此处仅用固定字符串与 `path.sep` 拼接。
  */
 export function getLocalDataDir(): string {
-  return path.join(process.cwd(), ".data");
+  const cwd = process.cwd().replace(/[/\\]+$/, "");
+  return `${cwd}${path.sep}.data`;
 }
 
-export function getLocalDataSubpath(...segments: string[]): string {
-  if (segments.length === 0) return getLocalDataDir();
-  return path.join(getLocalDataDir(), path.join(...segments));
+/**
+ * `relativePosix` 使用 `/` 分隔（如 `image-bed/0xabc/202601`），内部转为当前平台分隔符。
+ */
+export function getLocalDataSubpath(relativePosix: string): string {
+  const base = getLocalDataDir();
+  const trimmed = relativePosix.replace(/^[\\/]+/, "").replace(/\\/g, "/");
+  if (!trimmed) return base;
+  const suffix = trimmed.split("/").filter(Boolean).join(path.sep);
+  return `${base}${path.sep}${suffix}`;
 }

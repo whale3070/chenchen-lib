@@ -11,7 +11,7 @@ export function safePathSegment(id: string, max = 96): string {
 
 export function chapterCastRoot(authorLower: string, novelId: string): string {
   return path.join(
-    process.cwd(),
+    /*turbopackIgnore: true*/ process.cwd(),
     ".data",
     "chapter-casts",
     `${authorLower}_${safePathSegment(novelId)}`,

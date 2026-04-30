@@ -2,7 +2,7 @@
 
 import { FileUp, Plus } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
@@ -45,6 +45,25 @@ type Tab =
   | "tickets"
   | "adminMembers"
   | "settings";
+
+const WORKSPACE_TAB_VALUES: Tab[] = [
+  "novels",
+  "audiobooks",
+  "publish",
+  "video",
+  "pdfSign",
+  "translation",
+  "aiChat",
+  "analytics",
+  "tickets",
+  "adminMembers",
+  "settings",
+];
+
+function parseWorkspaceTabParam(raw: string | null): Tab | null {
+  if (!raw || !WORKSPACE_TAB_VALUES.includes(raw as Tab)) return null;
+  return raw as Tab;
+}
 type VideoMaterialId = "clean-carpet" | "cut-soap";
 type VideoVoiceId = "gentle-female" | "warm-male" | "energetic-girl";
 type TranslationSourceMode = "chapter" | "draft" | "manual";
@@ -206,6 +225,26 @@ function translationLangLabel(code: string, uiLocale: string): string {
   return TRANSLATION_LANG_LABELS_EN[code] ?? code.toUpperCase();
 }
 
+type TranslationModelOptionRow = {
+  value: string;
+  provider: string;
+  model: string;
+};
+
+function translationModelOptionLabel(
+  opt: TranslationModelOptionRow,
+  t: (key: string) => string,
+): string {
+  const key = `settings.translationModel.${opt.model}`;
+  const specific = t(key);
+  if (specific !== key) return specific;
+  const providerLabel =
+    opt.provider === "claude"
+      ? t("settings.translationProviderClaude")
+      : t("settings.translationProviderArk");
+  return `${providerLabel}: ${opt.model}`;
+}
+
 const TRANSLATION_EDITOR_SESSION_PREFIX = "translation-editor-pair:";
 const ANALYTICS_EVENT_LABELS_ZH: Record<string, string> = {
   save_draft: "保存草稿",
@@ -264,18 +303,66 @@ async function readApiJsonSafe<T extends Record<string, unknown>>(
   try {
     return JSON.parse(raw) as T;
   } catch {
-    return { error: `接口返回非 JSON（HTTP ${res.status}）` } as unknown as T;
+    return {
+      error: describeNonJsonHttpBody(res.status, raw),
+    } as unknown as T;
   }
+}
+
+/** CDN / 网关常以 HTML 返回 524/502，JSON.parse 失败时需给用户可读说明 */
+function describeNonJsonHttpBody(status: number, raw: string): string {
+  const trimmed = raw.trimStart();
+  const looksHtml =
+    trimmed.startsWith("<!") ||
+    trimmed.startsWith("<html") ||
+    trimmed.includes("<!DOCTYPE");
+
+  if (status === 524) {
+    return looksHtml
+      ? "翻译网关超时（HTTP 524）：边缘节点在等待上游翻译接口返回时超时（常见于单章过长或单次请求耗时过久）。请稍后重试本章；若反复出现，可为正文增加段落空行以拆分翻译块，或由运维调高 CDN / 反代的读超时。"
+      : `网关超时（HTTP 524）。请稍后重试；若正文较长可分段翻译。`;
+  }
+  if (status === 502 || status === 503) {
+    return looksHtml
+      ? `上游服务暂时不可用（HTTP ${status}），返回了网页错误页而非 JSON。请稍后重试。`
+      : `上游错误（HTTP ${status}）。请稍后重试。`;
+  }
+  if (looksHtml) {
+    return `服务器返回网页错误页而非 JSON（HTTP ${status}）。请稍后重试或检查网关配置。`;
+  }
+  const snippet = raw.replace(/\s+/g, " ").slice(0, 160);
+  return `接口返回非 JSON（HTTP ${status}）${snippet ? `：${snippet}` : ""}`;
 }
 
 export function AuthorDashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { status, isConnectPending } = useWeb3Auth();
   const authorId = useAuthStore((s) => s.authorId);
   const sessionResolved = useAuthStore((s) => s.sessionResolved);
   const { t, locale } = useSiteLocale();
 
-  const [tab, setTab] = useState<Tab>("novels");
+  const [tab, setTabState] = useState<Tab>(
+    () => parseWorkspaceTabParam(searchParams.get("tab")) ?? "novels",
+  );
+
+  const setTab = useCallback(
+    (next: Tab | ((prev: Tab) => Tab)) => {
+      setTabState((prev) => {
+        const resolved = typeof next === "function" ? (next as (p: Tab) => Tab)(prev) : next;
+        router.replace(`/workspace?tab=${encodeURIComponent(resolved)}`, { scroll: false });
+        return resolved;
+      });
+    },
+    [router],
+  );
+
+  useEffect(() => {
+    const q = parseWorkspaceTabParam(searchParams.get("tab"));
+    if (q) {
+      setTabState((prev) => (q !== prev ? q : prev));
+    }
+  }, [searchParams]);
   const [novels, setNovels] = useState<NovelListItem[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -333,6 +420,10 @@ export function AuthorDashboard() {
   const [prefsLoading, setPrefsLoading] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [prefsMessage, setPrefsMessage] = useState<string | null>(null);
+  const [translationPreferenceModel, setTranslationPreferenceModel] = useState("");
+  const [translationModelOptions, setTranslationModelOptions] = useState<
+    TranslationModelOptionRow[]
+  >([]);
   const [translationNovelId, setTranslationNovelId] = useState<string>("");
   const [translationSourceMode, setTranslationSourceMode] =
     useState<TranslationSourceMode>("chapter");
@@ -372,6 +463,11 @@ export function AuthorDashboard() {
   const [translationLoadingSources, setTranslationLoadingSources] =
     useState(false);
   const [translationRunning, setTranslationRunning] = useState(false);
+  const [translationBatchRunning, setTranslationBatchRunning] = useState(false);
+  const [translationBatchDetail, setTranslationBatchDetail] = useState("");
+  const [translationSkipExistingTargetLang, setTranslationSkipExistingTargetLang] =
+    useState(true);
+  const translationBatchAbortRef = useRef<AbortController | null>(null);
   const [translationProgress, setTranslationProgress] = useState(0);
   const [translationError, setTranslationError] = useState<string | null>(null);
   const [analyticsRange, setAnalyticsRange] = useState<"7d" | "30d" | "90d">(
@@ -543,6 +639,8 @@ export function AuthorDashboard() {
       const data = await readApiJsonSafe<{
         preferredLanguages?: string[];
         defaultTargetLanguage?: string;
+        translationModel?: string;
+        translationModelOptions?: TranslationModelOptionRow[];
         error?: string;
       }>(res);
       if (!res.ok) throw new Error(data.error ?? "加载翻译偏好失败");
@@ -557,6 +655,29 @@ export function AuthorDashboard() {
       setPreferredTranslationLanguages(preferred);
       setDefaultTranslationLanguage(defaultLang);
       setTranslationTargetLanguage(defaultLang);
+      const opts = Array.isArray(data.translationModelOptions)
+        ? data.translationModelOptions.filter(
+            (o): o is TranslationModelOptionRow =>
+              Boolean(
+                o &&
+                  typeof o === "object" &&
+                  typeof o.value === "string" &&
+                  typeof o.model === "string" &&
+                  typeof o.provider === "string",
+              ),
+          )
+        : [];
+      setTranslationModelOptions(opts);
+      const tmRaw =
+        typeof data.translationModel === "string" ? data.translationModel.trim() : "";
+      const tm =
+        tmRaw && opts.some((o) => o.value === tmRaw)
+          ? tmRaw
+          : opts[0]?.value ?? "";
+      setTranslationPreferenceModel(tm);
+      const resolvedTm = tm || opts[0]?.value || "";
+      const preferredOpt = opts.find((o) => o.value === resolvedTm);
+      setTranslationEngineModel(preferredOpt?.model ?? "");
     } catch (e) {
       console.error(e);
     } finally {
@@ -1810,11 +1931,14 @@ export function AuthorDashboard() {
           authorId: authorId,
           preferredLanguages: preferredTranslationLanguages,
           defaultTargetLanguage: defaultTranslationLanguage,
+          translationModel: translationPreferenceModel,
         }),
       });
       const data = await readApiJsonSafe<{
         preferredLanguages?: string[];
         defaultTargetLanguage?: string;
+        translationModel?: string;
+        translationModelOptions?: TranslationModelOptionRow[];
         error?: string;
       }>(res);
       if (!res.ok) throw new Error(data.error ?? t("settings.saveFailed"));
@@ -1826,6 +1950,28 @@ export function AuthorDashboard() {
       setPreferredTranslationLanguages(preferred);
       setDefaultTranslationLanguage(defaultLang);
       setTranslationTargetLanguage(defaultLang);
+      const filteredOpts = Array.isArray(data.translationModelOptions)
+        ? data.translationModelOptions.filter(
+            (o): o is TranslationModelOptionRow =>
+              Boolean(
+                o &&
+                  typeof o === "object" &&
+                  typeof o.value === "string" &&
+                  typeof o.model === "string" &&
+                  typeof o.provider === "string",
+              ),
+          )
+        : [];
+      if (filteredOpts.length > 0) {
+        setTranslationModelOptions(filteredOpts);
+        const v =
+          typeof data.translationModel === "string" ? data.translationModel.trim() : "";
+        if (v && filteredOpts.some((o) => o.value === v)) {
+          setTranslationPreferenceModel(v);
+        } else {
+          setTranslationPreferenceModel(filteredOpts[0]!.value);
+        }
+      }
       setPrefsMessage(t("settings.prefsSaved"));
     } catch (e) {
       setPrefsMessage(e instanceof Error ? e.message : t("settings.saveFailed"));
@@ -1835,7 +1981,8 @@ export function AuthorDashboard() {
   };
 
   const handleRunTranslation = async () => {
-    if (!authorId || !translationNovelId || translationRunning) return;
+    if (!authorId || !translationNovelId || translationRunning || translationBatchRunning)
+      return;
     if (translationSourceMode === "chapter" && !translationChapterId) {
       setTranslationError("请选择章节后再翻译");
       return;
@@ -1894,6 +2041,114 @@ export function AuthorDashboard() {
     } finally {
       window.clearInterval(timer);
       setTranslationRunning(false);
+    }
+  };
+
+  const handleTranslateAllChapters = async () => {
+    if (
+      !authorId ||
+      !translationNovelId ||
+      translationBatchRunning ||
+      translationRunning
+    )
+      return;
+    if (translationSourceMode !== "chapter") {
+      setTranslationError("请切换到「发布章节」来源后再使用全书翻译");
+      return;
+    }
+    if (translationChapters.length === 0) {
+      setTranslationError("暂无章节列表，请等待章节加载完成");
+      return;
+    }
+
+    const target = translationTargetLanguage;
+    const list = translationChapters.filter((c) => {
+      if (!translationSkipExistingTargetLang) return true;
+      return !c.translatedLangs.includes(target);
+    });
+    if (list.length === 0) {
+      setTranslationError(
+        "没有需要翻译的章节（所选语种均已存在译文，或去掉「跳过已有译文」后重试）",
+      );
+      return;
+    }
+
+    setTranslationError(null);
+    setTranslationBatchRunning(true);
+    setTranslationBatchDetail("");
+    setTranslationProgress(0);
+    const ac = new AbortController();
+    translationBatchAbortRef.current = ac;
+    const skippedCount = translationChapters.length - list.length;
+
+    try {
+      for (let i = 0; i < list.length; i += 1) {
+        if (ac.signal.aborted) {
+          setTranslationError("已取消全书翻译");
+          break;
+        }
+        const ch = list[i]!;
+        setTranslationBatchDetail(
+          `第 ${i + 1} / ${list.length} 章：${ch.title.length > 72 ? `${ch.title.slice(0, 72)}…` : ch.title}`,
+        );
+        setTranslationProgress(Math.round((i / Math.max(list.length, 1)) * 100));
+        setTranslationChapterId(ch.id);
+
+        const res = await fetch("/api/v1/novel-translation/translate", {
+          method: "POST",
+          signal: ac.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "x-wallet-address": authorId,
+          },
+          body: JSON.stringify({
+            authorId,
+            novelId: translationNovelId,
+            sourceType: "chapter",
+            chapterId: ch.id,
+            targetLanguage: target,
+          }),
+        });
+        const data = await readApiJsonSafe<{
+          sourceText?: string;
+          translatedText?: string;
+          model?: string;
+          error?: string;
+        }>(res);
+        if (!res.ok) {
+          throw new Error(
+            `「${ch.title}」翻译失败：${data.error ?? `HTTP ${res.status}`}`,
+          );
+        }
+        setTranslationSourcePreview((data.sourceText ?? "").slice(0, 120));
+        setTranslationSourceFullText(data.sourceText ?? "");
+        setTranslationOutputText(data.translatedText ?? "");
+        if (data.model) setTranslationEngineModel(data.model);
+        setTranslationProgress(Math.round(((i + 1) / list.length) * 100));
+      }
+
+      if (!ac.signal.aborted) {
+        setTranslationBatchDetail(
+          skippedCount > 0
+            ? `全书翻译完成：已处理 ${list.length} 章，跳过 ${skippedCount} 章（已有 ${translationLangLabel(target, locale)} 译文）`
+            : `全书翻译完成：已处理 ${list.length} 章`,
+        );
+        setTranslationProgress(100);
+        await loadTranslationSources(translationNovelId);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        setTranslationError("已取消全书翻译");
+      } else {
+        setTranslationError(e instanceof Error ? e.message : "全书翻译失败");
+      }
+    } finally {
+      translationBatchAbortRef.current = null;
+      setTranslationBatchRunning(false);
+      if (ac.signal.aborted) {
+        setTranslationProgress(0);
+        setTranslationBatchDetail("");
+      }
     }
   };
 
@@ -3298,13 +3553,69 @@ export function AuthorDashboard() {
                 <button
                   type="button"
                   onClick={() => void handleRunTranslation()}
-                  disabled={translationRunning || !translationNovelId}
+                  disabled={
+                    translationRunning || translationBatchRunning || !translationNovelId
+                  }
                   className="w-full rounded-lg border border-cyan-400/60 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {translationRunning ? "翻译中…" : "手动触发翻译"}
                 </button>
 
-                {(translationRunning || translationProgress > 0) && (
+                {translationSourceMode === "chapter" && translationChapters.length > 0 ? (
+                  <div className="space-y-2 rounded-lg border border-indigo-500/30 bg-[#0d1625]/80 p-3">
+                    <p className="text-[11px] font-medium text-indigo-200/90">全书顺序翻译</p>
+                    <p className="text-[11px] text-zinc-500">
+                      按章节列表自上而下逐章调用翻译接口（与「手动触发翻译」相同引擎与账户偏好）；可随时取消；耗时取决于章节数与正文长度。
+                    </p>
+                    <label className="flex cursor-pointer items-start gap-2 text-[11px] text-zinc-400">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 shrink-0"
+                        checked={translationSkipExistingTargetLang}
+                        onChange={(e) => setTranslationSkipExistingTargetLang(e.target.checked)}
+                        disabled={translationBatchRunning || translationRunning}
+                      />
+                      <span>
+                        跳过已有「
+                        {translationLangLabel(translationTargetLanguage, locale)}
+                        」译文的章节（避免重复消耗）
+                      </span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleTranslateAllChapters()}
+                        disabled={
+                          translationBatchRunning ||
+                          translationRunning ||
+                          !translationNovelId ||
+                          translationLoadingSources
+                        }
+                        className="rounded-lg border border-indigo-400/60 bg-indigo-500/15 px-4 py-2 text-sm font-semibold text-indigo-100 hover:bg-indigo-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {translationBatchRunning
+                          ? "全书翻译进行中…"
+                          : `开始全书翻译（${translationSkipExistingTargetLang ? translationChapters.filter((c) => !c.translatedLangs.includes(translationTargetLanguage)).length : translationChapters.length} 章）`}
+                      </button>
+                      {translationBatchRunning ? (
+                        <button
+                          type="button"
+                          onClick={() => translationBatchAbortRef.current?.abort()}
+                          className="rounded-lg border border-rose-400/50 bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-200 hover:bg-rose-500/20"
+                        >
+                          取消全书翻译
+                        </button>
+                      ) : null}
+                    </div>
+                    {translationBatchDetail ? (
+                      <p className="text-[11px] leading-relaxed text-zinc-400">
+                        {translationBatchDetail}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {(translationRunning || translationBatchRunning || translationProgress > 0) && (
                   <div>
                     <div className="mb-1 flex items-center justify-between text-[11px] text-zinc-400">
                       <span>翻译进度</span>
@@ -3984,6 +4295,32 @@ export function AuthorDashboard() {
               <p className="text-xs text-zinc-400">
                 {t("settings.translationPrefsBlurb")}
               </p>
+              {translationModelOptions.length > 0 ? (
+                <div>
+                  <label
+                    htmlFor="workspace-translation-model"
+                    className="mb-1 block text-xs font-medium text-zinc-300"
+                  >
+                    {t("settings.translationModel")}
+                  </label>
+                  <p className="mb-2 text-[11px] text-zinc-500">
+                    {t("settings.translationModelHint")}
+                  </p>
+                  <select
+                    id="workspace-translation-model"
+                    value={translationPreferenceModel}
+                    onChange={(e) => setTranslationPreferenceModel(e.target.value)}
+                    disabled={prefsLoading || savingPrefs}
+                    className="w-full max-w-md rounded-lg border border-[#324866] bg-[#0d1625] px-3 py-2 text-sm text-zinc-100"
+                  >
+                    {translationModelOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {translationModelOptionLabel(opt, t)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
               <div className="flex flex-wrap gap-2">
                 {TRANSLATION_LANGUAGES.map((lang) => (
                   <label

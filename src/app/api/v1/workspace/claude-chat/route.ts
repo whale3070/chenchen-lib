@@ -1,12 +1,16 @@
+import {
+  DEFAULT_CLAUDE_MODEL,
+  getClaudeApiKey,
+  getClaudeCompletionsUrl,
+  getClaudeModelChoices,
+  isClaudeChatConfigured,
+} from "@/lib/server/claude-chat-config";
 import { NextResponse, type NextRequest } from "next/server";
 import { isAddress } from "viem";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
-
-/** 工作台「AI 聊天」页默认模型；可由环境变量 CLAUDE_MODEL 覆盖 */
-const DEFAULT_CLAUDE_MODEL = "claude-opus-4-6";
 
 function unauthorized(message: string) {
   return NextResponse.json({ error: message }, { status: 401 });
@@ -24,45 +28,6 @@ function parseWalletHeader(
     return { ok: false, res: unauthorized("缺少或无效的 x-wallet-address") };
   }
   return { ok: true, walletLower: headerAddr.toLowerCase() };
-}
-
-function getClaudeCompletionsUrl(): string | null {
-  const raw = process.env.CLAUDE_URL?.trim();
-  if (!raw) return null;
-  const noComment = raw.split("#")[0].trim();
-  if (noComment.includes("chat/completions")) return noComment;
-  return `${noComment.replace(/\/$/, "")}/chat/completions`;
-}
-
-function getClaudeApiKey(): string | null {
-  return process.env.CLAUDE_API?.trim() || null;
-}
-
-export type ClaudeModelChoice = { id: string; model: string };
-
-/**
- * 优先使用 CLAUDE_MODEL_ID1, CLAUDE_MODEL_ID2, …（可继续扩展，最多到 CLAUDE_MODEL_ID32；中间可留空跳过）。
- * 未配置任何 ID* 时，回退为 CLAUDE_MODEL（及可选 CLAUDE_MODEL_ID2 作为第二路），与旧环境兼容。
- */
-function getClaudeModelChoices(): ClaudeModelChoice[] {
-  const hasId1 = Boolean(process.env.CLAUDE_MODEL_ID1?.trim());
-  if (hasId1) {
-    const fromIds: ClaudeModelChoice[] = [];
-    for (let i = 1; i <= 32; i++) {
-      const v = process.env[`CLAUDE_MODEL_ID${i}`]?.trim();
-      if (v) fromIds.push({ id: String(i), model: v });
-    }
-    return fromIds;
-  }
-  const primary = process.env.CLAUDE_MODEL?.trim() || DEFAULT_CLAUDE_MODEL;
-  const legacySecond = process.env.CLAUDE_MODEL_ID2?.trim();
-  const out: ClaudeModelChoice[] = [{ id: "1", model: primary }];
-  if (legacySecond) out.push({ id: "2", model: legacySecond });
-  return out;
-}
-
-function isClaudeChatConfigured(): boolean {
-  return Boolean(getClaudeCompletionsUrl() && getClaudeApiKey());
 }
 
 /** 默认 system：避免模型“假装能打开链接”；可由 CLAUDE_SYSTEM 完全覆盖。 */

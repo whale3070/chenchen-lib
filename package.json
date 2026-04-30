@@ -8,7 +8,8 @@
     "build:safe": "NODE_OPTIONS=--max-old-space-size=3072 nice -n 10 next build",
     "start": "next start",
     "worker:ai-reflow": "tsx src/workers/ai-reflow-worker.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "generate:pitch-i18n": "node scripts/generate-pitch-deck-i18n.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1035.0",

@@ -4,6 +4,7 @@ import path from "node:path";
 import { isAddress } from "viem";
 
 import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
+import { readMergedChapterSourcePlainText } from "@/lib/server/merged-chapter-source";
 import { NextResponse, type NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -103,18 +104,6 @@ function parseWalletHeader(req: NextRequest):
   return { ok: true, walletLower: safeAuthorId(headerAddr) };
 }
 
-function htmlToPlainText(html: string) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function translatedLangsForChapter(
   store: TranslationStoreLite | null,
   chapterId: string,
@@ -204,26 +193,38 @@ export async function GET(req: NextRequest) {
     const publishIds = new Set(publishRecord?.publishedChapterIds ?? []);
     const publishAll =
       publishRecord?.visibility === "public" && publishIds.size === 0;
-    chapters = chapterNodes
+    const outlines = chapterNodes
       .map((n) => {
         const id = typeof n.id === "string" ? n.id : "";
         if (!id) return null;
-        const htmlCandidate =
-          n.metadata?.chapterHtmlMobile ??
-          n.metadata?.chapterHtmlDesktop ??
-          n.metadata?.chapterHtml;
-        const text = typeof htmlCandidate === "string" ? htmlToPlainText(htmlCandidate) : "";
-        const translatedLangs = translatedLangsForChapter(store, id);
         return {
           id,
           title: typeof n.title === "string" && n.title.trim() ? n.title.trim() : "未命名章节",
-          preview: text.slice(0, 120),
-          isPublished: publishAll || publishIds.has(id),
-          hasEnglishTranslation: translatedLangs.includes("en"),
-          translatedLangs,
         };
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
+    const previewBodies = await Promise.all(
+      outlines.map(({ id }) =>
+        readMergedChapterSourcePlainText({
+          authorLower: wh.walletLower,
+          novelId,
+          chapterId: id,
+          preferMobile: false,
+        }),
+      ),
+    );
+    chapters = outlines.map((row, idx) => {
+      const translatedLangs = translatedLangsForChapter(store, row.id);
+      const text = previewBodies[idx]?.trim() ?? "";
+      return {
+        id: row.id,
+        title: row.title,
+        preview: text.slice(0, 120),
+        isPublished: publishAll || publishIds.has(row.id),
+        hasEnglishTranslation: translatedLangs.includes("en"),
+        translatedLangs,
+      };
+    });
     novelTranslatedLanguages = novelTranslationLanguageUnion(
       store,
       chapters.map((c) => c.id),

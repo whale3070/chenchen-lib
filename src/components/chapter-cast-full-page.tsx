@@ -15,9 +15,10 @@ import {
 import { ChapterCastPanel } from "@/components/chapter-cast-panel";
 import { WalletConnect } from "@/components/wallet-connect";
 import {
-  contentPayloadToChapterHtmlForExtract,
-  type ChapterContentBlob,
-} from "@/lib/chapter-content-html-for-extract";
+  chapterHasCastExtract,
+  fetchChapterHtmlFromSavedContent,
+  postChapterCastExtract,
+} from "@/lib/chapter-cast-extract-flow";
 import { useAuthStore } from "@/store/auth-store";
 
 type Props = { novelId: string };
@@ -34,6 +35,8 @@ export function ChapterCastFullPage({ novelId }: Props) {
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [extractLoading, setExtractLoading] = useState(false);
+  const [extractAllLoading, setExtractAllLoading] = useState(false);
+  const [extractAllProgress, setExtractAllProgress] = useState("");
 
   const urlSyncedRef = useRef(false);
   const chapterQuerySig = `${searchParams.get("chapterId") ?? ""}|${searchParams.get("chapterIndex") ?? ""}`;
@@ -176,52 +179,33 @@ export function ChapterCastFullPage({ novelId }: Props) {
     const chapterIndex = idx + 1;
     setExtractLoading(true);
     try {
-      const cr = await fetch(
-        `/api/v1/chapter-content?authorId=${encodeURIComponent(authorId)}&docId=${encodeURIComponent(novelId)}&chapterId=${encodeURIComponent(selectedChapterId)}`,
-        { headers: { "x-wallet-address": authorId } },
+      const loaded = await fetchChapterHtmlFromSavedContent(
+        authorId,
+        novelId,
+        selectedChapterId,
       );
-      const cdata = (await cr.json()) as {
-        content?: ChapterContentBlob | null;
-        error?: string;
-      };
-      if (!cr.ok) {
-        throw new Error(cdata.error ?? `正文加载失败 HTTP ${cr.status}`);
+      if (!loaded.ok) {
+        throw new Error(loaded.error);
       }
-      const chapterHtml = contentPayloadToChapterHtmlForExtract(cdata.content);
-      if (!chapterHtml.trim()) {
+      if (!loaded.html.trim()) {
         window.alert("当前章节无已保存正文（请先在工作台编辑并保存本章）。");
         return;
       }
-      const r = await fetch("/api/v1/chapter-cast/extract", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-wallet-address": authorId,
-        },
-        body: JSON.stringify({
-          authorId,
-          novelId,
-          chapterId: selectedChapterId,
-          chapterIndex,
-          chapterHtml,
-        }),
+      const res = await postChapterCastExtract({
+        authorId,
+        novelId,
+        chapterId: selectedChapterId,
+        chapterIndex,
+        chapterHtml: loaded.html,
       });
-      const data = (await r.json()) as {
-        ok?: boolean;
-        version?: string;
-        files?: string[];
-        count?: number;
-        error?: string;
-        code?: string;
-      };
-      if (!r.ok) {
-        if (r.status === 403 && data.code === "subscription_required") {
-          window.alert(data.error ?? "需要付费会员订阅后方可使用此 AI 功能。");
+      if (!res.ok) {
+        if (res.status === 403 && res.code === "subscription_required") {
+          window.alert(res.error ?? "需要付费会员订阅后方可使用此 AI 功能。");
           return;
         }
-        throw new Error(data.error ?? `HTTP ${r.status}`);
+        throw new Error(res.error);
       }
-      window.alert(`已写入 ${data.count ?? 0} 个 JSON（${data.version ?? ""}）`);
+      window.alert(`已写入 ${res.count} 个 JSON（${res.version}）`);
       setRefreshKey((k) => k + 1);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "抽取失败");
@@ -229,6 +213,71 @@ export function ChapterCastFullPage({ novelId }: Props) {
       setExtractLoading(false);
     }
   }, [authorId, novelId, selectedChapterId, chapterNodes]);
+
+  const handleExtractAllChapters = useCallback(async () => {
+    if (!authorId || chapterNodes.length === 0) {
+      window.alert("请先连接钱包并确保作品有大纲章节。");
+      return;
+    }
+    if (
+      !window.confirm(
+        `将按顺序检查全书 ${chapterNodes.length} 章：已有抽取结果的章节会跳过；无正文的章节会跳过；其余逐章调用 AI 抽取登场人物。耗时与章节数有关，是否继续？`,
+      )
+    ) {
+      return;
+    }
+    setExtractAllLoading(true);
+    setExtractAllProgress("");
+    let skipped = 0;
+    let extracted = 0;
+    let emptyBody = 0;
+    try {
+      for (let i = 0; i < chapterNodes.length; i++) {
+        const ch = chapterNodes[i]!;
+        const chapterIndex = i + 1;
+        setExtractAllProgress(`第 ${chapterIndex}/${chapterNodes.length} 章…`);
+        const has = await chapterHasCastExtract(authorId, novelId, ch.id);
+        if (has) {
+          skipped += 1;
+          continue;
+        }
+        const loaded = await fetchChapterHtmlFromSavedContent(authorId, novelId, ch.id);
+        if (!loaded.ok) {
+          throw new Error(`第 ${chapterIndex} 章：${loaded.error}`);
+        }
+        if (!loaded.html.trim()) {
+          emptyBody += 1;
+          continue;
+        }
+        const res = await postChapterCastExtract({
+          authorId,
+          novelId,
+          chapterId: ch.id,
+          chapterIndex,
+          chapterHtml: loaded.html,
+        });
+        if (!res.ok) {
+          if (res.status === 403 && res.code === "subscription_required") {
+            window.alert(res.error);
+            break;
+          }
+          throw new Error(
+            `第 ${chapterIndex} 章（${ch.title || ch.id}）：${res.error}`,
+          );
+        }
+        extracted += 1;
+      }
+      setRefreshKey((k) => k + 1);
+      window.alert(
+        `全书扫描完成。\n跳过（已有抽取）：${skipped} 章\n新抽取：${extracted} 章\n无正文跳过：${emptyBody} 章`,
+      );
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "批量抽取失败");
+    } finally {
+      setExtractAllLoading(false);
+      setExtractAllProgress("");
+    }
+  }, [authorId, novelId, chapterNodes]);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-neutral-100 dark:bg-neutral-950">
@@ -301,8 +350,19 @@ export function ChapterCastFullPage({ novelId }: Props) {
                 chapterId={selectedChapterId}
                 refreshKey={refreshKey}
                 onExtract={handleExtractChapterCast}
-                extractDisabled={!selectedChapterId || extractLoading}
+                extractDisabled={
+                  !selectedChapterId || extractLoading || extractAllLoading
+                }
                 extractLoading={extractLoading}
+                onExtractAll={handleExtractAllChapters}
+                extractAllDisabled={
+                  !authorId ||
+                  chapterNodes.length === 0 ||
+                  extractLoading ||
+                  extractAllLoading
+                }
+                extractAllLoading={extractAllLoading}
+                extractAllProgress={extractAllProgress}
                 variant="wide"
               />
             </div>

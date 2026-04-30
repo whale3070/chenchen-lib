@@ -99,7 +99,7 @@ function makeHostedFileName(originalName: string) {
 }
 
 function audiobookIndexPath(authorLower: string) {
-  return getLocalDataSubpath("audiobooks", "authors", `${authorLower}.json`);
+  return getLocalDataSubpath(`audiobooks/authors/${authorLower}.json`);
 }
 
 function getPublicBaseUrl(req: NextRequest): string {

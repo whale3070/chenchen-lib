@@ -127,6 +127,11 @@ type Props = {
   onExtract: () => void | Promise<void>;
   extractDisabled: boolean;
   extractLoading: boolean;
+  /** 一键全书（仅 wide 展示）；未传则不显示 */
+  onExtractAll?: () => void | Promise<void>;
+  extractAllDisabled?: boolean;
+  extractAllLoading?: boolean;
+  extractAllProgress?: string;
   /** compact：侧栏竖条；wide：全页左列表右表单 */
   variant?: "compact" | "wide";
 };
@@ -139,6 +144,10 @@ export function ChapterCastPanel({
   onExtract,
   extractDisabled,
   extractLoading,
+  onExtractAll,
+  extractAllDisabled = false,
+  extractAllLoading = false,
+  extractAllProgress = "",
   variant = "compact",
 }: Props) {
   const [loading, setLoading] = useState(false);
@@ -359,6 +368,17 @@ export function ChapterCastPanel({
       >
         {extractLoading ? "分析中…" : "AI 抽取登场人物"}
       </button>
+      {onExtractAll ? (
+        <button
+          type="button"
+          disabled={extractAllDisabled || extractAllLoading || extractLoading}
+          title="按章节顺序：已有抽取则跳过；无正文则跳过；否则调用 AI"
+          onClick={() => void onExtractAll()}
+          className="w-full rounded-md border border-emerald-600/70 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-950 disabled:cursor-not-allowed disabled:opacity-45 dark:border-emerald-600 dark:bg-emerald-950/35 dark:text-emerald-100 sm:w-auto"
+        >
+          {extractAllLoading ? "全书抽取中…" : "一键抽取全书章节"}
+        </button>
+      ) : null}
       {versions.length > 0 ? (
         <div
           className={[
@@ -394,6 +414,11 @@ export function ChapterCastPanel({
       {!loading && versions.length === 0 ? (
         <p className="px-2 text-center text-[11px] leading-snug text-neutral-500">
           尚无人物信息。点击上方按钮分析当前章正文，每人写入一个 JSON（新版本目录 v1、v2…）。
+        </p>
+      ) : null}
+      {extractAllProgress.trim() ? (
+        <p className="px-2 text-center text-[11px] text-emerald-800 dark:text-emerald-200/90">
+          {extractAllProgress}
         </p>
       ) : null}
     </>

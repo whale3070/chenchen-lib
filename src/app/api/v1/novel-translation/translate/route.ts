@@ -5,22 +5,33 @@ import { isAddress } from "viem";
 
 import { parseLeadingJsonValue } from "@/lib/parse-leading-json";
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  readAllMergedChaptersPlainText,
+  readMergedChapterSourcePlainText,
+} from "@/lib/server/merged-chapter-source";
+import { resolveTranslationBackend } from "@/lib/novel-translation-models";
 import { paidMemberForbiddenResponse } from "@/lib/server/paid-membership";
+import {
+  getClaudeApiKey,
+  getClaudeCompletionsUrl,
+} from "@/lib/server/claude-chat-config";
+import { readTranslationPreferencesData } from "@/lib/server/translation-preferences-store";
 import { trackWalletEvent } from "@/lib/server/wallet-analytics";
 
 export const runtime = "nodejs";
 
 const MAX_MODEL_INPUT_CHARS = 12000;
-const CHUNK_TARGET_CHARS = 1400;
+/** 段落合并目标上限（更小 → 单次上游请求更快，降低 CF 524） */
+const CHUNK_TARGET_CHARS = 900;
+/** 单块硬上限；合并后仍超过则强制再切（应对「少空行 → 单块过大」） */
+const CHUNK_HARD_MAX_CHARS = 1800;
 const CHUNK_MAX_RETRY = 2;
 
-type StructurePayload = {
-  nodes?: Array<{
-    id?: string;
-    kind?: string;
-    metadata?: Record<string, unknown>;
-  }>;
-};
+const TRANSIENT_UPSTREAM_STATUSES = new Set([429, 502, 503, 524]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 type TranslationStore = {
   authorId: string;
@@ -173,34 +184,17 @@ async function readChapterText(
   novelId: string,
   chapterId: string,
 ): Promise<string> {
-  const raw = await fs.readFile(structurePath(authorLower, novelId), "utf8");
-  const structure = parseLeadingJsonValue(raw) as StructurePayload;
-  const chapter = (structure.nodes ?? []).find(
-    (n) => n.kind === "chapter" && n.id === chapterId,
-  );
-  const htmlCandidate =
-    chapter?.metadata?.chapterHtmlMobile ??
-    chapter?.metadata?.chapterHtmlDesktop ??
-    chapter?.metadata?.chapterHtml;
-  if (typeof htmlCandidate !== "string") return "";
-  return htmlToPlainText(htmlCandidate);
+  /** 与读者端/library 一致：合并 structure metadata 与 chapter-content（按 updatedAt 择优），避免仅读后一处导致「无正文」。 */
+  return readMergedChapterSourcePlainText({
+    authorLower,
+    novelId,
+    chapterId,
+    preferMobile: false,
+  });
 }
 
 async function readAllChapterText(authorLower: string, novelId: string): Promise<string> {
-  const raw = await fs.readFile(structurePath(authorLower, novelId), "utf8");
-  const structure = parseLeadingJsonValue(raw) as StructurePayload;
-  const chapterTexts = (structure.nodes ?? [])
-    .filter((n) => n.kind === "chapter")
-    .map((chapter) => {
-      const htmlCandidate =
-        chapter?.metadata?.chapterHtmlMobile ??
-        chapter?.metadata?.chapterHtmlDesktop ??
-        chapter?.metadata?.chapterHtml;
-      return typeof htmlCandidate === "string" ? htmlToPlainText(htmlCandidate) : "";
-    })
-    .map((t) => t.trim())
-    .filter(Boolean);
-  return chapterTexts.join("\n\n").trim();
+  return readAllMergedChaptersPlainText({ authorLower, novelId, preferMobile: false });
 }
 
 async function readDraftText(authorLower: string, novelId: string): Promise<string> {
@@ -280,6 +274,46 @@ function splitForTranslation(text: string, targetSize = CHUNK_TARGET_CHARS): str
   return chunks;
 }
 
+/**
+ * 单块超过 hardMax 时强制切开（优先换行、句末标点），避免单次 prompt 过大拖垮连接。
+ */
+function hardSplitChunk(text: string, hardMax: number): string[] {
+  const t = text.trim();
+  if (!t) return [];
+  if (t.length <= hardMax) return [t];
+
+  const minBreak = Math.max(32, Math.floor(hardMax * 0.35));
+  const head = t.slice(0, hardMax);
+
+  let cut = Math.max(head.lastIndexOf("\n\n"), head.lastIndexOf("\n"));
+  if (cut < minBreak) {
+    cut = -1;
+    for (let i = hardMax - 1; i >= minBreak; i--) {
+      const ch = t[i];
+      if (ch && "。！？!?".includes(ch)) {
+        cut = i + 1;
+        break;
+      }
+    }
+  }
+  if (cut < minBreak) {
+    const sp = head.lastIndexOf(" ");
+    cut = sp >= minBreak ? sp + 1 : hardMax;
+  }
+
+  const left = t.slice(0, cut).trim();
+  const right = t.slice(cut).trim();
+  return [...hardSplitChunk(left, hardMax), ...hardSplitChunk(right, hardMax)].filter(Boolean);
+}
+
+function flattenChunksByHardMax(chunks: string[], hardMax: number): string[] {
+  const out: string[] = [];
+  for (const c of chunks) {
+    out.push(...hardSplitChunk(c, hardMax));
+  }
+  return out;
+}
+
 function buildGlossary(sourceText: string): string[] {
   const bag = new Set<string>();
   const upper = sourceText.match(/\b[A-Z][A-Za-z0-9_-]{1,24}\b/g) ?? [];
@@ -303,45 +337,117 @@ async function callDoubaoChat(params: {
   systemPrompt: string;
   userPrompt: string;
 }) {
-  const resp = await fetch(`${params.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: params.model,
-      temperature: 0.1,
-      messages: [
-        { role: "system", content: params.systemPrompt },
-        { role: "user", content: params.userPrompt },
-      ],
-    }),
-  });
-  if (!resp.ok) {
+  const maxAttempts = 4;
+  let lastError = "";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const resp = await fetch(`${params.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: params.model,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: params.systemPrompt },
+          { role: "user", content: params.userPrompt },
+        ],
+      }),
+    });
+
+    if (resp.ok) {
+      const data = (await resp.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+      if (!content) return { ok: false as const, error: "豆包未返回翻译内容" };
+      return { ok: true as const, content };
+    }
+
     const text = await resp.text().catch(() => "");
     const hint =
       text.includes("ModelNotOpen") || text.includes("has not activated the model")
         ? "（当前账号未开通该模型，请检查 ARK_MODEL / DOUBAO_MODEL）"
         : "";
-    return {
-      ok: false as const,
-      error: `豆包请求失败（${resp.status}）${hint}${text ? `: ${text.slice(0, 180)}` : ""}`,
-    };
+    lastError = `豆包请求失败（${resp.status}）${hint}${text ? `: ${text.slice(0, 180)}` : ""}`;
+
+    if (!TRANSIENT_UPSTREAM_STATUSES.has(resp.status)) {
+      return { ok: false as const, error: lastError };
+    }
+    if (attempt < maxAttempts - 1) {
+      await sleep(500 * 2 ** attempt);
+    }
   }
-  const data = (await resp.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-  if (!content) return { ok: false as const, error: "豆包未返回翻译内容" };
-  return { ok: true as const, content };
+
+  return { ok: false as const, error: lastError };
 }
 
-async function enforceEnglishNoCjk(text: string): Promise<string | null> {
-  const envFallback = await readFallbackEnv();
-  const conf = resolveDoubaoConfig(envFallback);
-  if (!conf.apiKey) return null;
+async function callClaudeCompatibleChat(params: {
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+}): Promise<
+  | { ok: true; content: string }
+  | { ok: false; error: string }
+> {
+  const url = getClaudeCompletionsUrl();
+  const apiKey = getClaudeApiKey();
+  if (!url || !apiKey) {
+    return { ok: false, error: "未配置 CLAUDE_URL 或 CLAUDE_API" };
+  }
 
+  const maxAttempts = 4;
+  let lastError = "";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: params.model,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: params.systemPrompt },
+          { role: "user", content: params.userPrompt },
+        ],
+        max_tokens: 4096,
+      }),
+    });
+
+    if (resp.ok) {
+      const data = (await resp.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+      if (!content) return { ok: false, error: "翻译接口未返回正文" };
+      return { ok: true, content };
+    }
+
+    const text = await resp.text().catch(() => "");
+    lastError = `Claude 兼容接口请求失败（${resp.status}）${text ? `: ${text.slice(0, 240)}` : ""}`;
+
+    if (!TRANSIENT_UPSTREAM_STATUSES.has(resp.status)) {
+      return { ok: false, error: lastError };
+    }
+    if (attempt < maxAttempts - 1) {
+      await sleep(500 * 2 ** attempt);
+    }
+  }
+
+  return { ok: false, error: lastError };
+}
+
+type TranslationEngineBackend = ReturnType<typeof resolveTranslationBackend>;
+
+async function enforceEnglishNoCjk(
+  text: string,
+  backend: TranslationEngineBackend,
+): Promise<string | null> {
   const prompt = [
     "Rewrite the following text into fluent English only.",
     "Hard rule: do not output any Chinese characters. This is mandatory.",
@@ -350,28 +456,49 @@ async function enforceEnglishNoCjk(text: string): Promise<string | null> {
     "",
     text.slice(0, MAX_MODEL_INPUT_CHARS),
   ].join("\n");
+  const systemPrompt =
+    "You strictly output English-only rewritten text without Chinese characters.";
+
+  if (backend.provider === "claude") {
+    const res = await callClaudeCompatibleChat({
+      model: backend.model,
+      systemPrompt,
+      userPrompt: prompt,
+    });
+    return res.ok ? res.content : null;
+  }
+
+  const envFallback = await readFallbackEnv();
+  const conf = resolveDoubaoConfig(envFallback);
+  if (!conf.apiKey) return null;
 
   const res = await callDoubaoChat({
     apiKey: conf.apiKey,
     baseUrl: conf.baseUrl,
-    model: conf.model,
-    systemPrompt:
-      "You strictly output English-only rewritten text without Chinese characters.",
+    model: backend.model,
+    systemPrompt,
     userPrompt: prompt,
   });
   return res.ok ? res.content : null;
 }
 
-async function translateByDoubaoRobust(sourceText: string, targetLanguageCode: string) {
+async function translateByDoubaoRobust(
+  sourceText: string,
+  targetLanguageCode: string,
+  arkModelId: string,
+) {
   const envFallback = await readFallbackEnv();
   const conf = resolveDoubaoConfig(envFallback);
   if (!conf.apiKey) {
     return { ok: false as const, error: "未配置 DOUBAO_API_KEY" };
   }
 
+  const model = arkModelId.trim() || conf.model;
+
   const clipped = sourceText.slice(0, MAX_MODEL_INPUT_CHARS).trim();
-  const chunks = splitForTranslation(clipped);
-  if (chunks.length === 0) return { ok: true as const, translatedText: "", model: conf.model };
+  let chunks = splitForTranslation(clipped);
+  chunks = flattenChunksByHardMax(chunks, CHUNK_HARD_MAX_CHARS);
+  if (chunks.length === 0) return { ok: true as const, translatedText: "", model };
   const glossary = buildGlossary(clipped);
 
   const translatedChunks: string[] = [];
@@ -399,7 +526,7 @@ async function translateByDoubaoRobust(sourceText: string, targetLanguageCode: s
       const translated = await callDoubaoChat({
         apiKey: conf.apiKey,
         baseUrl: conf.baseUrl,
-        model: conf.model,
+        model,
         systemPrompt: "你是严格遵守规则的小说翻译助手，只输出翻译后的正文。",
         userPrompt: prompt,
       });
@@ -407,7 +534,10 @@ async function translateByDoubaoRobust(sourceText: string, targetLanguageCode: s
       let candidate = translated.content;
 
       if (targetLanguageCode === "en" && containsCjk(candidate)) {
-        const repaired = await enforceEnglishNoCjk(candidate);
+        const repaired = await enforceEnglishNoCjk(candidate, {
+          provider: "ark",
+          model,
+        });
         if (repaired && !containsCjk(repaired)) {
           candidate = repaired;
         }
@@ -426,7 +556,82 @@ async function translateByDoubaoRobust(sourceText: string, targetLanguageCode: s
   return {
     ok: true as const,
     translatedText: translatedChunks.join("\n\n"),
-    model: conf.model,
+    model,
+  };
+}
+
+async function translateByClaudeCompatibleRobust(
+  sourceText: string,
+  targetLanguageCode: string,
+  claudeModelId: string,
+) {
+  const url = getClaudeCompletionsUrl();
+  const apiKey = getClaudeApiKey();
+  if (!url || !apiKey) {
+    return { ok: false as const, error: "未配置 CLAUDE_URL 或 CLAUDE_API" };
+  }
+
+  const model = claudeModelId.trim();
+  const clipped = sourceText.slice(0, MAX_MODEL_INPUT_CHARS).trim();
+  let chunks = splitForTranslation(clipped);
+  chunks = flattenChunksByHardMax(chunks, CHUNK_HARD_MAX_CHARS);
+  if (chunks.length === 0) return { ok: true as const, translatedText: "", model };
+  const glossary = buildGlossary(clipped);
+
+  const translatedChunks: string[] = [];
+  for (const chunk of chunks) {
+    let done = "";
+    for (let attempt = 0; attempt <= CHUNK_MAX_RETRY; attempt += 1) {
+      const prompt = [
+        "你是专业小说翻译编辑。",
+        `将下方正文翻译为${languageLabel(targetLanguageCode)}。`,
+        "必须严格遵守：",
+        "1) 保留原段落结构和换行。",
+        "2) 不要添加解释、注释、译者说明。",
+        "3) 必须完整翻译，不允许保留原文片段。",
+        targetLanguageCode === "en"
+          ? "4) 英文输出中不允许出现任何中文字符。"
+          : "4) 输出统一为目标语言，不混用原语言。",
+        glossary.length > 0
+          ? `5) 术语统一：${glossary.map((x) => `「${x}」`).join("、")}`
+          : "5) 人名/组织名/术语需前后一致翻译。",
+        "",
+        "正文：",
+        chunk,
+      ].join("\n");
+
+      const translated = await callClaudeCompatibleChat({
+        model,
+        systemPrompt: "你是严格遵守规则的小说翻译助手，只输出翻译后的正文。",
+        userPrompt: prompt,
+      });
+      if (!translated.ok) return translated;
+      let candidate = translated.content;
+
+      if (targetLanguageCode === "en" && containsCjk(candidate)) {
+        const repaired = await enforceEnglishNoCjk(candidate, {
+          provider: "claude",
+          model,
+        });
+        if (repaired && !containsCjk(repaired)) {
+          candidate = repaired;
+        }
+      }
+      if (targetLanguageCode === "en" && containsCjk(candidate)) {
+        if (attempt < CHUNK_MAX_RETRY) continue;
+        return { ok: false as const, error: "英文翻译仍含中文字符，请重试或缩短文本后重试" };
+      }
+      done = candidate;
+      break;
+    }
+    if (!done) return { ok: false as const, error: "翻译失败，请稍后重试" };
+    translatedChunks.push(done);
+  }
+
+  return {
+    ok: true as const,
+    translatedText: translatedChunks.join("\n\n"),
+    model,
   };
 }
 
@@ -434,10 +639,8 @@ async function generateLocalizedMetadata(params: {
   translatedText: string;
   targetLanguageCode: string;
   sourceTitle: string;
+  backend: TranslationEngineBackend;
 }): Promise<{ title?: string; synopsis?: string; tags?: string[] } | null> {
-  const envFallback = await readFallbackEnv();
-  const conf = resolveDoubaoConfig(envFallback);
-  if (!conf.apiKey) return null;
   const prompt = [
     "你是内容运营编辑。",
     `基于以下${languageLabel(params.targetLanguageCode)}文本生成标题、简介和标签。`,
@@ -455,15 +658,32 @@ async function generateLocalizedMetadata(params: {
     "文本：",
     params.translatedText.slice(0, 2600),
   ].join("\n");
-  const res = await callDoubaoChat({
-    apiKey: conf.apiKey,
-    baseUrl: conf.baseUrl,
-    model: conf.model,
-    systemPrompt: "你是严格输出 JSON 的标签生成器。",
-    userPrompt: prompt,
-  });
-  if (!res.ok) return null;
-  const jsonText = res.content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? res.content;
+  const systemPrompt = "你是严格输出 JSON 的标签生成器。";
+
+  let rawContent: string | null = null;
+  if (params.backend.provider === "claude") {
+    const res = await callClaudeCompatibleChat({
+      model: params.backend.model,
+      systemPrompt,
+      userPrompt: prompt,
+    });
+    if (res.ok) rawContent = res.content;
+  } else {
+    const envFallback = await readFallbackEnv();
+    const conf = resolveDoubaoConfig(envFallback);
+    if (!conf.apiKey) return null;
+    const res = await callDoubaoChat({
+      apiKey: conf.apiKey,
+      baseUrl: conf.baseUrl,
+      model: params.backend.model,
+      systemPrompt,
+      userPrompt: prompt,
+    });
+    if (res.ok) rawContent = res.content;
+  }
+  if (!rawContent) return null;
+
+  const jsonText = rawContent.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? rawContent;
   try {
     const parsed = JSON.parse(jsonText) as {
       title?: unknown;
@@ -534,12 +754,11 @@ export async function POST(req: NextRequest) {
     if (sourceType === "chapter") {
       if (!chapterId) return badRequest("Missing chapterId");
       sourceText = await readChapterText(wh.walletLower, novelId, chapterId);
-      // 兜底：章节正文为空时，回退到草稿；草稿仍为空再回退到整本章节拼接。
+      // 按章节翻译时禁止回退到草稿或全书拼接，否则会误译其它章节/草稿内容。
       if (!sourceText.trim()) {
-        sourceText = await readDraftText(wh.walletLower, novelId).catch(() => "");
-      }
-      if (!sourceText.trim()) {
-        sourceText = await readAllChapterText(wh.walletLower, novelId).catch(() => "");
+        return badRequest(
+          "该章节在作品结构中尚无已保存的正文，请先在主编台打开该章并保存后再翻译。",
+        );
       }
     } else if (sourceType === "draft") {
       sourceText = await readDraftText(wh.walletLower, novelId);
@@ -556,14 +775,39 @@ export async function POST(req: NextRequest) {
 
   if (!sourceText.trim()) return badRequest("原文内容为空，无法翻译");
 
-  const translated = await translateByDoubaoRobust(sourceText, targetLanguage);
+  const prefs = await readTranslationPreferencesData(wh.walletLower);
+  const backend = resolveTranslationBackend(prefs?.translationModel ?? null);
+
+  let translated: Awaited<ReturnType<typeof translateByDoubaoRobust>>;
+  if (backend.provider === "claude") {
+    if (!getClaudeCompletionsUrl() || !getClaudeApiKey()) {
+      return NextResponse.json(
+        {
+          error:
+            "账户设置已选择 Claude 模型，但服务端未配置 CLAUDE_URL / CLAUDE_API，无法翻译",
+        },
+        { status: 503 },
+      );
+    }
+    translated = await translateByClaudeCompatibleRobust(
+      sourceText,
+      targetLanguage,
+      backend.model,
+    );
+  } else {
+    translated = await translateByDoubaoRobust(
+      sourceText,
+      targetLanguage,
+      backend.model,
+    );
+  }
   if (!translated.ok) {
     return NextResponse.json({ error: translated.error }, { status: 500 });
   }
 
   let finalText = translated.translatedText;
   if (targetLanguage === "en" && containsCjk(finalText)) {
-    const refined = await enforceEnglishNoCjk(finalText);
+    const refined = await enforceEnglishNoCjk(finalText, backend);
     if (refined && !containsCjk(refined)) {
       finalText = refined;
     }
@@ -573,6 +817,7 @@ export async function POST(req: NextRequest) {
     translatedText: finalText,
     targetLanguageCode: targetLanguage,
     sourceTitle,
+    backend,
   });
 
   try {

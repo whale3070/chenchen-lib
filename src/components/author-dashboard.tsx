@@ -3,6 +3,7 @@
 import { FileUp, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import Script from "next/script";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
@@ -64,6 +65,19 @@ function parseWorkspaceTabParam(raw: string | null): Tab | null {
   if (!raw || !WORKSPACE_TAB_VALUES.includes(raw as Tab)) return null;
   return raw as Tab;
 }
+
+const WORKSPACE_NAV_ITEMS: { tab: Tab; labelKey: string; adminOnly?: boolean }[] = [
+  { tab: "novels", labelKey: "workspace.tabNovels" },
+  { tab: "publish", labelKey: "workspace.tabPublish" },
+  { tab: "video", labelKey: "workspace.tabVideo" },
+  { tab: "pdfSign", labelKey: "workspace.tabPdfSign" },
+  { tab: "settings", labelKey: "workspace.tabSettings" },
+  { tab: "translation", labelKey: "workspace.tabTranslation" },
+  { tab: "aiChat", labelKey: "workspace.tabAiChat" },
+  { tab: "analytics", labelKey: "workspace.tabAnalytics" },
+  { tab: "tickets", labelKey: "workspace.tabTickets" },
+  { tab: "adminMembers", labelKey: "workspace.tabAdminMembers", adminOnly: true },
+];
 type VideoMaterialId = "clean-carpet" | "cut-soap";
 type VideoVoiceId = "gentle-female" | "warm-male" | "energetic-girl";
 type TranslationSourceMode = "chapter" | "draft" | "manual";
@@ -217,6 +231,10 @@ const TRANSLATION_LANG_LABELS_EN: Record<string, string> = {
   vi: "Vietnamese",
   th: "Thai",
 };
+
+const STRIPE_BUY_BUTTON_ID = "buy_btn_1TToJmLtx07htcsRmVSWQKpO";
+const STRIPE_PUBLISHABLE_KEY =
+  "pk_live_51TR17LLtx07htcsRTZ2ndxSFdSenmUJkZ64lZ87KgNqK4L2J1U0o4D3xQMd0NbLhSAAXlPVJsxsjAPTy7x4oJqjE00ody1VIUV";
 
 function translationLangLabel(code: string, uiLocale: string): string {
   if (uiLocale === "zh-CN") {
@@ -495,6 +513,13 @@ export function AuthorDashboard() {
   const [vipGrantWallet, setVipGrantWallet] = useState("");
   const [vipGrantDays, setVipGrantDays] = useState(30);
   const [vipSubmitting, setVipSubmitting] = useState(false);
+  const [billingSubscriptionActive, setBillingSubscriptionActive] = useState<
+    boolean | null
+  >(null);
+  const [billingPeriodEnd, setBillingPeriodEnd] = useState<string | null>(null);
+  const [billingStatusLoading, setBillingStatusLoading] = useState(false);
+  const [billingCheckoutLoading, setBillingCheckoutLoading] = useState(false);
+  const [billingBanner, setBillingBanner] = useState<string | null>(null);
   const [audioUploading, setAudioUploading] = useState(false);
   const [audioUploadProgress, setAudioUploadProgress] = useState(0);
   const [audioUploadError, setAudioUploadError] = useState<string | null>(null);
@@ -884,6 +909,61 @@ export function AuthorDashboard() {
     [authorId, loadVipMembers],
   );
 
+  const loadBillingSubscriptionStatus = useCallback(async () => {
+    if (!authorId) return;
+    setBillingStatusLoading(true);
+    try {
+      const res = await fetch("/api/v1/billing/subscription-status", {
+        headers: { "x-wallet-address": authorId },
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await readApiJsonSafe<{
+        subscriptionActive?: boolean;
+        currentPeriodEnd?: string | null;
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error ?? "加载订阅状态失败");
+      setBillingSubscriptionActive(data.subscriptionActive === true);
+      setBillingPeriodEnd(
+        typeof data.currentPeriodEnd === "string" && data.currentPeriodEnd.trim()
+          ? data.currentPeriodEnd.trim()
+          : null,
+      );
+    } catch (e) {
+      setBillingSubscriptionActive(null);
+      setBillingPeriodEnd(null);
+      setBillingBanner(e instanceof Error ? e.message : "加载订阅状态失败");
+    } finally {
+      setBillingStatusLoading(false);
+    }
+  }, [authorId]);
+
+  const startStripeSubscriptionCheckout = useCallback(async () => {
+    if (!authorId) return;
+    setBillingCheckoutLoading(true);
+    setBillingBanner(null);
+    try {
+      const res = await fetch("/api/v1/billing/create-checkout-session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-wallet-address": authorId,
+        },
+        credentials: "include",
+      });
+      const data = await readApiJsonSafe<{ url?: string; error?: string }>(res);
+      if (!res.ok) throw new Error(data.error ?? "无法创建 Stripe 结账会话");
+      const url = typeof data.url === "string" ? data.url.trim() : "";
+      if (!url) throw new Error("未返回 Stripe 结账地址");
+      window.location.href = url;
+    } catch (e) {
+      setBillingBanner(e instanceof Error ? e.message : "打开结账页面失败");
+    } finally {
+      setBillingCheckoutLoading(false);
+    }
+  }, [authorId]);
+
   const loadAudiobooks = useCallback(async () => {
     if (!authorId) return;
     setAudiobooksLoading(true);
@@ -1041,6 +1121,23 @@ export function AuthorDashboard() {
     if (!authorId) return;
     void loadTranslationPreferences();
   }, [authorId, loadTranslationPreferences]);
+
+  useEffect(() => {
+    if (tab !== "settings" || !authorId) return;
+    void loadBillingSubscriptionStatus();
+  }, [tab, authorId, loadBillingSubscriptionStatus]);
+
+  useEffect(() => {
+    const b = searchParams.get("billing");
+    if (!b || tab !== "settings") return;
+    if (b === "stripe_success") {
+      setBillingBanner(t("settings.billingSuccess"));
+      void loadBillingSubscriptionStatus();
+    } else if (b === "stripe_cancel") {
+      setBillingBanner(t("settings.billingCancelHint"));
+    }
+    router.replace("/workspace?tab=settings", { scroll: false });
+  }, [searchParams, tab, router, loadBillingSubscriptionStatus, t]);
 
   useEffect(() => {
     if (publishRows.length === 0) return;
@@ -2167,19 +2264,31 @@ export function AuthorDashboard() {
       (translationSourceMode === "manual" ? translationManualText.trim() : "");
     if (typeof window === "undefined") return;
     const key = `${TRANSLATION_EDITOR_SESSION_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    window.sessionStorage.setItem(
-      key,
-      JSON.stringify({
-        novelId: translationNovelId,
-        sourceText,
-        translatedText,
-        targetLanguage: translationTargetLanguage,
-        createdAt: Date.now(),
-      }),
-    );
-    router.push(
-      `/editor/${encodeURIComponent(translationNovelId)}?translationPairKey=${encodeURIComponent(key)}`,
-    );
+    const payload = JSON.stringify({
+      novelId: translationNovelId,
+      sourceText,
+      translatedText,
+      targetLanguage: translationTargetLanguage,
+      createdAt: Date.now(),
+    });
+    try {
+      window.sessionStorage.setItem(key, payload);
+    } catch {
+      /* quota / privacy mode — localStorage fallback below */
+    }
+    try {
+      window.localStorage.setItem(key, payload);
+    } catch {
+      /* quota */
+    }
+    const path = `/editor/${encodeURIComponent(translationNovelId)}?translationPairKey=${encodeURIComponent(key)}`;
+    const opened = window.open(path, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      const ok = window.confirm(
+        "浏览器拦截了新标签页。是否在本标签页打开主编台对照？（将离开多语言翻译页；也可在地址栏允许本站弹出窗口后重试。）",
+      );
+      if (ok) router.push(path);
+    }
   }, [
     router,
     translationManualText,
@@ -2555,8 +2664,8 @@ export function AuthorDashboard() {
 
   if (!sessionResolved) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[var(--background)] px-4 text-neutral-800 dark:text-neutral-100">
-        <p className="text-sm font-medium">{t("workspace.sessionLoading")}</p>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[#0b1220] px-4 text-zinc-100">
+        <p className="text-sm font-medium text-zinc-200">{t("workspace.sessionLoading")}</p>
       </div>
     );
   }
@@ -2568,166 +2677,93 @@ export function AuthorDashboard() {
 
   if (walletBusy && !authorId) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[var(--background)] px-4 text-neutral-800 dark:text-neutral-100">
-        <p className="text-sm font-medium">{t("workspace.connectingTitle")}</p>
-        <p className="text-center text-xs text-neutral-500 dark:text-neutral-400">
-          {t("workspace.connectingHint")}
-        </p>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-[#0b1220] px-4 text-zinc-100">
+        <p className="text-sm font-medium text-zinc-200">{t("workspace.connectingTitle")}</p>
+        <p className="text-center text-xs text-zinc-500">{t("workspace.connectingHint")}</p>
       </div>
     );
   }
 
   if (!authorId) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--background)] px-4 py-10 text-neutral-800 dark:text-neutral-100">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#0b1220] px-4 py-10 text-zinc-100">
         <WorkspaceAuthGate />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[var(--background)] text-neutral-900 dark:text-neutral-100">
-      <header className="shrink-0 border-b border-neutral-200 dark:border-neutral-800">
-        <nav className="mx-auto flex max-w-4xl items-center gap-1 px-4 py-3">
-          <button
-            type="button"
-            onClick={() => setTab("novels")}
-            className={
-              tab === "novels"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabNovels")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("publish")}
-            className={
-              tab === "publish"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabPublish")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("video")}
-            className={
-              tab === "video"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabVideo")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("pdfSign")}
-            className={
-              tab === "pdfSign"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabPdfSign")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("settings")}
-            className={
-              tab === "settings"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabSettings")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("translation")}
-            className={
-              tab === "translation"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabTranslation")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("aiChat")}
-            className={
-              tab === "aiChat"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabAiChat")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("analytics")}
-            className={
-              tab === "analytics"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabAnalytics")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("tickets")}
-            className={
-              tab === "tickets"
-                ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-            }
-          >
-            {t("workspace.tabTickets")}
-          </button>
-          {vipAdmin === true ? (
-            <button
-              type="button"
-              onClick={() => setTab("adminMembers")}
-              className={
-                tab === "adminMembers"
-                  ? "rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium dark:bg-neutral-800"
-                  : "rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
-              }
+    <div className="flex min-h-screen flex-col bg-[#0b1220] text-zinc-100 antialiased">
+      <header className="shrink-0 border-b border-[#1e2a3f] bg-[#121a29]">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-4 sm:py-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 space-y-0.5">
+              <h1 className="text-xl font-semibold tracking-tight text-zinc-100">
+                {t("workspace.shellTitle")}
+              </h1>
+              <p className="max-w-xl text-[13px] leading-relaxed text-zinc-400">
+                {t("workspace.shellSubtitle")}
+              </p>
+            </div>
+            <Link
+              href="/"
+              className="shrink-0 rounded-lg border border-[#324866] bg-[#0d1625] px-3.5 py-2 text-xs font-medium text-zinc-200 transition hover:border-cyan-500/40 hover:bg-[#152238] hover:text-white"
             >
-              {t("workspace.tabAdminMembers")}
-            </button>
-          ) : null}
-        </nav>
+              {t("workspace.backHome")}
+            </Link>
+          </div>
+
+          <nav
+            aria-label={t("workspace.shellNavAria")}
+            className="-mx-1 flex gap-1.5 overflow-x-auto pb-1 [scrollbar-color:rgba(50,72,102,0.8)_#0d1625] [scrollbar-width:thin]"
+          >
+            {WORKSPACE_NAV_ITEMS.map((item) => {
+              if (item.adminOnly && vipAdmin !== true) return null;
+              const active = tab === item.tab;
+              return (
+                <button
+                  key={item.tab}
+                  type="button"
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => setTab(item.tab)}
+                  className={
+                    active
+                      ? "shrink-0 rounded-full border border-cyan-500/50 bg-[#172a45] px-3.5 py-2 text-xs font-semibold text-cyan-100 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.12)] sm:text-sm"
+                      : "shrink-0 rounded-full border border-[#324866] bg-[#0d1625] px-3.5 py-2 text-xs font-medium text-zinc-400 transition hover:border-[#3d5680] hover:bg-[#142232] hover:text-zinc-100 sm:text-sm"
+                  }
+                >
+                  {t(item.labelKey)}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-5 sm:py-10">
         {tab === "novels" && (
           <div className="space-y-8">
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="flex w-full flex-col items-start gap-3 rounded-2xl border-2 border-dashed border-neutral-300 bg-neutral-50 p-8 text-left transition dark:border-neutral-600 dark:bg-neutral-900/50">
+              <div className="flex w-full flex-col items-start gap-3 rounded-2xl border-2 border-dashed border-[#2d405e] bg-[#121a29] p-8 text-left transition">
                 <button
                   type="button"
                   onClick={openModal}
                   className="flex w-full cursor-pointer flex-col items-start gap-2 text-left transition hover:opacity-90"
                 >
-                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#1a2a42] text-cyan-300">
                     <Plus className="h-6 w-6" aria-hidden />
                   </span>
-                  <span className="text-lg font-semibold">新建小说</span>
-                  <span className="text-sm text-neutral-600 dark:text-neutral-400">
+                  <span className="text-lg font-semibold text-zinc-100">新建小说</span>
+                  <span className="text-sm text-zinc-400">
                     创建一部新作品，填写标题与简介后即可进入编辑器
                   </span>
                 </button>
 
-                <div className="w-full border-t border-neutral-200 pt-4 dark:border-neutral-700">
-                  <p className="mb-2 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                <div className="w-full border-t border-[#2d405e] pt-4">
+                  <p className="mb-2 text-xs font-medium text-zinc-300">
                     从 .txt 批量新建（静默后台切章）
                   </p>
-                  <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
+                  <p className="mb-2 text-xs text-zinc-500">
                     可多选 .txt：每份自动新建作品、正则切章并保存大纲与首章稿面；处理期间可继续浏览本页，完成后在下方「全部作品」查看。
                   </p>
                   <input
@@ -2745,7 +2781,7 @@ export function AuthorDashboard() {
                     type="button"
                     onClick={() => novelTxtInputRef.current?.click()}
                     disabled={txtBatchImport.active}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-white/80 px-3 py-1.5 text-xs font-medium text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-cyan-500/40 dark:bg-cyan-950/30 dark:text-cyan-200 dark:hover:bg-cyan-950/50"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-[#0d1625] px-3 py-1.5 text-xs font-medium text-cyan-200 hover:border-cyan-400/60 hover:bg-[#152238] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <FileUp className="h-3.5 w-3.5 shrink-0" aria-hidden />
                     {txtBatchImport.active
@@ -2754,12 +2790,12 @@ export function AuthorDashboard() {
                   </button>
                   {txtBatchImport.active && txtBatchImport.total > 0 ? (
                     <div className="mt-2 w-full">
-                      <div className="mb-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                      <div className="mb-0.5 text-[11px] text-zinc-500">
                         切章与保存均在后台顺序执行，请勿关闭页面直至进度走完
                       </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-[#1a2a42]">
                         <div
-                          className="h-full bg-cyan-500 transition-[width] duration-300 dark:bg-cyan-400"
+                          className="h-full bg-cyan-500 transition-[width] duration-300"
                           style={{
                             width: `${Math.min(100, Math.round((txtBatchImport.done / txtBatchImport.total) * 100))}%`,
                           }}
@@ -2768,7 +2804,7 @@ export function AuthorDashboard() {
                     </div>
                   ) : null}
                   {txtBatchImport.failures.length > 0 ? (
-                    <ul className="mt-2 max-h-28 w-full space-y-1 overflow-y-auto rounded border border-rose-200/60 bg-rose-50/50 p-2 text-[11px] text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-200">
+                    <ul className="mt-2 max-h-28 w-full space-y-1 overflow-y-auto rounded border border-rose-900/50 bg-rose-950/30 p-2 text-[11px] text-rose-200">
                       {txtBatchImport.failures.map((f, idx) => (
                         <li key={`${idx}-${f.name}`} className="break-words">
                           <span className="font-medium">{f.name}</span>：{f.error}
@@ -2779,12 +2815,12 @@ export function AuthorDashboard() {
                 </div>
               </div>
 
-              <div className="flex w-full flex-col items-start gap-3 rounded-2xl border-2 border-dashed border-violet-400/40 bg-violet-50/40 p-8 text-left transition dark:bg-violet-950/20">
-                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-200 text-violet-900 dark:bg-violet-900/60 dark:text-violet-100">
+              <div className="flex w-full flex-col items-start gap-3 rounded-2xl border-2 border-dashed border-violet-500/25 bg-[#121a29] p-8 text-left transition">
+                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#1c1830] text-violet-300">
                   <Plus className="h-6 w-6" aria-hidden />
                 </span>
-                <span className="text-lg font-semibold">新建有声书</span>
-                <span className="text-sm text-neutral-600 dark:text-neutral-400">
+                <span className="text-lg font-semibold text-zinc-100">新建有声书</span>
+                <span className="text-sm text-zinc-400">
                   上传音频文件创建有声书素材（支持 MP3/WAV/M4A/AAC/OGG/FLAC）
                 </span>
                 <input
@@ -2802,7 +2838,7 @@ export function AuthorDashboard() {
                   type="button"
                   onClick={() => audioInputRef.current?.click()}
                   disabled={audioUploading}
-                  className="rounded-lg border border-violet-500/50 px-3 py-1.5 text-xs font-medium text-violet-300 hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-lg border border-violet-500/35 bg-[#0d1625] px-3 py-1.5 text-xs font-medium text-violet-200 hover:border-violet-400/55 hover:bg-[#152238] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {audioUploading ? "上传中…" : "选择并上传音频"}
                 </button>
@@ -2817,23 +2853,23 @@ export function AuthorDashboard() {
                 ) : null}
                 {audioUploading || audioUploadProgress > 0 ? (
                   <div className="w-full">
-                    <div className="mb-1 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
+                    <div className="mb-1 flex items-center justify-between text-[11px] text-zinc-500">
                       <span>上传进度</span>
                       <span>{audioUploadProgress}%</span>
                     </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-violet-200/50 dark:bg-violet-900/40">
+                    <div className="h-2 overflow-hidden rounded-full bg-[#1a2a42]">
                       <div
-                        className="h-full bg-gradient-to-r from-violet-400 to-fuchsia-500 transition-all"
+                        className="h-full bg-violet-500 transition-all"
                         style={{ width: `${audioUploadProgress}%` }}
                       />
                     </div>
                   </div>
                 ) : null}
                 {audioUploadError ? (
-                  <p className="text-xs text-red-500 dark:text-red-400">{audioUploadError}</p>
+                  <p className="text-xs text-red-400">{audioUploadError}</p>
                 ) : null}
                 {uploadedAudios.length > 0 ? (
-                  <ul className="max-h-28 w-full space-y-1 overflow-y-auto text-xs text-zinc-500 dark:text-zinc-400">
+                  <ul className="max-h-28 w-full space-y-1 overflow-y-auto text-xs text-zinc-500">
                     {uploadedAudios.slice(0, 6).map((item) => (
                       <li key={`${item.url}-${item.name}`} className="truncate">
                         <a
@@ -2853,34 +2889,34 @@ export function AuthorDashboard() {
             </div>
 
             <section>
-              <h2 className="mb-3 text-sm font-medium text-neutral-500 dark:text-neutral-400">
+              <h2 className="mb-3 text-sm font-medium text-zinc-400">
                 全部作品
               </h2>
               {loadingList || audiobooksLoading ? (
-                <p className="text-sm text-neutral-500">加载中…</p>
+                <p className="text-sm text-zinc-400">加载中…</p>
               ) : unifiedWorkItems.length === 0 ? (
-                <p className="text-sm text-neutral-500">
+                <p className="text-sm text-zinc-400">
                   暂无作品，可新建小说（含 .txt 批量导入）、或上传有声书。
                 </p>
               ) : audiobooksError ? (
-                <p className="text-sm text-rose-500 dark:text-rose-400">{audiobooksError}</p>
+                <p className="text-sm text-rose-400">{audiobooksError}</p>
               ) : (
                 <ul className="space-y-2">
                   {unifiedWorkItems.map((entry) =>
                     entry.kind === "novel" ? (
                       <li key={`novel-${entry.novel.id}`}>
-                        <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-950 dark:hover:border-neutral-500">
+                        <div className="rounded-xl border border-[#1e2a3f] bg-[#121a29] px-4 py-3 transition hover:border-cyan-500/40">
                           <div className="flex flex-wrap items-baseline justify-between gap-2">
                             <Link
                               href={`/editor/${encodeURIComponent(entry.novel.id)}`}
-                              className="font-medium hover:underline"
+                              className="font-medium text-zinc-100 hover:text-cyan-200 hover:underline"
                             >
                               {entry.novel.title}
                             </Link>
                             <div className="flex items-center gap-2">
-                              <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                              <span className="text-xs tabular-nums text-zinc-500">
                                 约 {entry.novel.wordCount.toLocaleString("zh-CN")} 字
-                                <span className="mx-1.5 text-neutral-300 dark:text-neutral-600">
+                                <span className="mx-1.5 text-zinc-600">
                                   ·
                                 </span>
                                 最后修改 {formatModified(entry.novel.lastModified, locale)}
@@ -2888,14 +2924,14 @@ export function AuthorDashboard() {
                               <button
                                 type="button"
                                 onClick={() => openEditModal(entry.novel)}
-                                className="rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                                className="rounded-md border border-zinc-600 px-2 py-0.5 text-[11px] text-zinc-200 hover:border-cyan-500/40 hover:bg-[#1a2436] hover:text-cyan-200"
                               >
                                 编辑
                               </button>
                             </div>
                           </div>
                           {entry.novel.description ? (
-                            <p className="mt-1 line-clamp-2 text-xs text-neutral-500 dark:text-neutral-400">
+                            <p className="mt-1 line-clamp-2 text-xs text-zinc-400">
                               {entry.novel.description}
                             </p>
                           ) : null}
@@ -2903,15 +2939,15 @@ export function AuthorDashboard() {
                       </li>
                     ) : (
                       <li key={`audiobook-${entry.audiobook.id}`}>
-                        <div className="rounded-xl border border-violet-300/50 bg-violet-50/40 px-4 py-3 transition dark:border-violet-700/60 dark:bg-violet-950/20">
+                        <div className="rounded-xl border border-violet-500/35 bg-[#161426] px-4 py-3 transition hover:border-violet-400/60">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <p
-                              className="max-w-[70%] truncate text-sm font-medium text-violet-900 dark:text-violet-200"
+                              className="max-w-[70%] truncate text-sm font-medium text-violet-200"
                               title={entry.audiobook.displayName || entry.audiobook.fileName}
                             >
                               {entry.audiobook.displayName || entry.audiobook.fileName}
                             </p>
-                            <span className="text-xs text-violet-700 dark:text-violet-300">
+                            <span className="text-xs text-violet-300">
                               有声书
                             </span>
                           </div>
@@ -2919,12 +2955,12 @@ export function AuthorDashboard() {
                             <button
                               type="button"
                               onClick={() => openAudiobookEditModal(entry.audiobook)}
-                              className="rounded-md border border-violet-500/50 px-2 py-0.5 text-[11px] text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
+                              className="rounded-md border border-violet-500/50 px-2 py-0.5 text-[11px] text-violet-300 hover:bg-violet-500/15"
                             >
                               编辑
                             </button>
                           </div>
-                          <p className="mt-1 truncate text-xs text-neutral-600 dark:text-neutral-400">
+                          <p className="mt-1 truncate text-xs text-zinc-400">
                             归档小说：
                             {entry.audiobook.novelId
                               ? novels.find((n) => n.id === entry.audiobook.novelId)?.title ??
@@ -2932,16 +2968,16 @@ export function AuthorDashboard() {
                               : "未归档"}
                           </p>
                           {(entry.audiobook.synopsis ?? "").trim() ? (
-                            <p className="mt-1 line-clamp-2 text-xs text-neutral-600 dark:text-neutral-300">
+                            <p className="mt-1 line-clamp-2 text-xs text-zinc-300">
                               简介：{entry.audiobook.synopsis}
                             </p>
                           ) : null}
                           {(entry.audiobook.details ?? "").trim() ? (
-                            <p className="mt-1 line-clamp-2 text-xs text-neutral-500 dark:text-neutral-400">
+                            <p className="mt-1 line-clamp-2 text-xs text-zinc-400">
                               详情：{entry.audiobook.details}
                             </p>
                           ) : null}
-                          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                          <p className="mt-1 text-xs text-zinc-500">
                             上传时间：{formatModified(entry.audiobook.updatedAt, locale)}
                           </p>
                           <audio controls src={entry.audiobook.url} className="mt-2 w-full" />
@@ -3659,11 +3695,12 @@ export function AuthorDashboard() {
                 </div>
                 <button
                   type="button"
+                  title="在新标签页打开主编台对照译文与原文，本页保持在多语言翻译"
                   onClick={handleApplyTranslationToCurrentChapter}
                   disabled={!translationNovelId || !translationOutputText.trim()}
                   className="w-full rounded-lg border border-emerald-400/60 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  应用译文到当前章节
+                  在主编台对照译文（新标签）
                 </button>
                 {translationEngineModel ? (
                   <p className="text-[11px] text-zinc-500">
@@ -4287,6 +4324,55 @@ export function AuthorDashboard() {
               <SiteLocaleControl id="workspace-settings-ui-locale" />
             </section>
             <WalletConnect />
+
+            <section className="space-y-3 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
+              <h3 className="text-sm font-semibold text-zinc-100">
+                {t("settings.billingTitle")}
+              </h3>
+              <p className="text-xs text-zinc-400">{t("settings.billingBlurb")}</p>
+              {billingBanner ? (
+                <p className="rounded-md border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+                  {billingBanner}
+                </p>
+              ) : null}
+              {!authorId ? (
+                <p className="text-xs text-zinc-500">{t("settings.billingSignInFirst")}</p>
+              ) : billingStatusLoading ? (
+                <p className="text-xs text-zinc-500">{t("settings.billingLoading")}</p>
+              ) : (
+                <div className="space-y-2">
+                  {billingSubscriptionActive ? (
+                    <>
+                      <p className="text-xs font-medium text-emerald-300">
+                        {t("settings.billingActive")}
+                      </p>
+                      {billingPeriodEnd ? (
+                        <p className="text-xs text-zinc-400">
+                          {t("settings.billingPeriodEnd")}{" "}
+                          <span className="text-zinc-200">
+                            {formatModified(billingPeriodEnd, locale)}
+                          </span>
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="text-xs text-zinc-400">{t("settings.billingInactive")}</p>
+                  )}
+                  <div className="pt-1">
+                    <p className="mb-2 text-[11px] text-zinc-500">Stripe 订阅：</p>
+                    <Script
+                      src="https://js.stripe.com/v3/buy-button.js"
+                      strategy="afterInteractive"
+                    />
+                    <div
+                      dangerouslySetInnerHTML={{
+                        __html: `<stripe-buy-button buy-button-id="${STRIPE_BUY_BUTTON_ID}" publishable-key="${STRIPE_PUBLISHABLE_KEY}"></stripe-buy-button>`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </section>
 
             <section className="space-y-3 rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4">
               <h3 className="text-sm font-semibold text-zinc-100">

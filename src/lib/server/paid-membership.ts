@@ -8,6 +8,9 @@ export type PaidMemberRecord = {
   /** ISO 8601，当前计费周期结束时间 */
   currentPeriodEnd: string;
   updatedAt?: string;
+  /** Stripe 资源 ID（可选，便于排错与对账） */
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
 };
 
 const MEMBERS_DIR = path.join(process.cwd(), ".data", "billing", "members");
@@ -164,6 +167,25 @@ export async function listPaidMemberRecords(): Promise<PaidMemberListItem[]> {
 }
 
 /**
+ * 写入或覆盖单作者会员记录（与文件名 `0x….json` 一致）。
+ */
+export async function replacePaidMemberRecord(
+  walletLower: string,
+  rec: PaidMemberRecord,
+): Promise<void> {
+  const base = memberJsonBasename(walletLower);
+  if (!base) {
+    throw new Error("invalid_wallet");
+  }
+  await fs.mkdir(MEMBERS_DIR, { recursive: true });
+  await fs.writeFile(
+    path.join(MEMBERS_DIR, `${base}.json`),
+    `${JSON.stringify(rec, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+/**
  * 授予或续期 VIP：在现有周期结束时间基础上顺延 extendDays（若仍在有效期内），否则从当前时间起算。
  */
 export async function grantPaidMember(params: {
@@ -190,13 +212,10 @@ export async function grantPaidMember(params: {
     status: "active",
     currentPeriodEnd: end.toISOString(),
     updatedAt: new Date().toISOString(),
+    stripeCustomerId: existing?.stripeCustomerId,
+    stripeSubscriptionId: existing?.stripeSubscriptionId,
   };
-  await fs.mkdir(MEMBERS_DIR, { recursive: true });
-  await fs.writeFile(
-    path.join(MEMBERS_DIR, `${base}.json`),
-    `${JSON.stringify(rec, null, 2)}\n`,
-    "utf8",
-  );
+  await replacePaidMemberRecord(base, rec);
   return rec;
 }
 

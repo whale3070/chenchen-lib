@@ -69,6 +69,10 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
       "Signed in but server did not return an account id. Please try again or contact support.",
     "workspace.connectWallet": "Connect wallet",
     "workspace.backHome": "Back to home",
+    "workspace.shellTitle": "Creator workspace",
+    "workspace.shellSubtitle":
+      "Writing, publishing, translation, and media tools — sign-in required.",
+    "workspace.shellNavAria": "Workspace sections",
     "workspace.tabNovels": "My novels",
     "workspace.tabPublish": "Publishing",
     "workspace.tabVideo": "Video → MP3",
@@ -151,6 +155,20 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "settings.savingPrefs": "Saving…",
     "settings.prefsSaved": "Translation preferences saved",
     "settings.saveFailed": "Save failed",
+
+    "settings.billingTitle": "Author AI subscription (Stripe)",
+    "settings.billingBlurb":
+      "Subscribe with a card after signing in. Payments are processed by Stripe Checkout; webhook events sync your VIP window to the same `.data/billing/members` record used for admin grants.",
+    "settings.billingLoading": "Checking subscription…",
+    "settings.billingSignInFirst": "Sign in (email or wallet) to manage billing.",
+    "settings.billingActive": "Your subscription is active.",
+    "settings.billingInactive":
+      "No active subscription detected for this account. Start checkout to unlock author-side AI features.",
+    "settings.billingPeriodEnd": "Current period ends:",
+    "settings.billingSubscribe": "Subscribe with Stripe Checkout",
+    "settings.billingBusy": "Redirecting to Stripe…",
+    "settings.billingSuccess": "Payment recorded. Your membership will update in a few seconds after Stripe sends the webhook.",
+    "settings.billingCancelHint": "Checkout was closed before completion. You were not charged.",
 
     "wallet.connect": "Connect wallet",
     "wallet.connecting": "Connecting…",
@@ -251,6 +269,9 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
       "登录响应异常（未返回账户标识），请重试或联系管理员。",
     "workspace.connectWallet": "连接钱包",
     "workspace.backHome": "返回首页",
+    "workspace.shellTitle": "作者工作台",
+    "workspace.shellSubtitle": "创作、发布、多语言与音视频等工具；需先登录。",
+    "workspace.shellNavAria": "工作台功能分区",
     "workspace.tabNovels": "我的小说",
     "workspace.tabPublish": "发布管理",
     "workspace.tabVideo": "视频管理",
@@ -330,6 +351,19 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "settings.savingPrefs": "保存中…",
     "settings.prefsSaved": "翻译语言偏好已保存",
     "settings.saveFailed": "保存失败",
+
+    "settings.billingTitle": "作者 AI 会员（Stripe）",
+    "settings.billingBlurb":
+      "登录后使用银行卡订阅。付款由 Stripe Checkout 完成；Webhook 将周期写入与管理员手动授予相同的 `.data/billing/members` 记录，用于解锁工作台 AI 等功能。",
+    "settings.billingLoading": "正在查询订阅状态…",
+    "settings.billingSignInFirst": "请先使用邮箱或钱包登录后再管理订阅。",
+    "settings.billingActive": "当前订阅有效。",
+    "settings.billingInactive": "未检测到有效订阅。点击下方按钮通过 Stripe 完成按月订阅。",
+    "settings.billingPeriodEnd": "本周期结束时间：",
+    "settings.billingSubscribe": "使用 Stripe Checkout 订阅",
+    "settings.billingBusy": "正在跳转至 Stripe…",
+    "settings.billingSuccess": "支付已提交。Stripe Webhook 送达后数秒内会同步会员有效期。",
+    "settings.billingCancelHint": "已取消结账流程，未扣款。",
 
     "wallet.connect": "连接钱包",
     "wallet.connecting": "连接中…",

@@ -5,10 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:safe": "NODE_OPTIONS=--max-old-space-size=3072 nice -n 10 next build",
+    "build:safe": "NODE_OPTIONS='--max-old-space-size=6144' next build",
     "start": "next start",
+    "lint": "eslint .",
     "worker:ai-reflow": "tsx src/workers/ai-reflow-worker.ts",
-    "lint": "eslint",
     "generate:pitch-i18n": "node scripts/generate-pitch-deck-i18n.mjs"
   },
   "dependencies": {
@@ -56,7 +56,8 @@
     "turndown-plugin-gfm": "^1.0.2",
     "viem": "2.47.12",
     "wagmi": "^2.19.2",
-    "zustand": "^5.0.8"
+    "zustand": "^5.0.8",
+    "stripe": "^18.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.2",

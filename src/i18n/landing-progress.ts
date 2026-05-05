@@ -6,6 +6,15 @@ export type ProgressStage = {
 
 const ZH: ProgressStage[] = [
   {
+    dateLabel: "2026 年 5 月 5 日（第三十九天）",
+    title: "开发进度",
+    items: [
+      "接上了 Stripe 收款，但还没有测试是否能够成功收款。",
+      "提升了作者工作台的美观程度。",
+      "AI 聊天功能新增了复制消息按钮。",
+    ],
+  },
+  {
     dateLabel: "2026 年 4 月 28 日（第三十一天）",
     title: "开发进度",
     items: [
@@ -222,6 +231,15 @@ const ZH: ProgressStage[] = [
 
 const EN: ProgressStage[] = [
   {
+    dateLabel: "May 5, 2026 (day 39)",
+    title: "Progress",
+    items: [
+      "Integrated Stripe payments, but end-to-end payment collection has not been tested yet.",
+      "Improved the visual design of the author workspace.",
+      "Added a copy-message button to AI chat.",
+    ],
+  },
+  {
     dateLabel: "April 28, 2026 (day 31)",
     title: "Progress",
     items: [
@@ -317,7 +335,7 @@ const EN: ProgressStage[] = [
     title: "Progress",
     items: [
       "Added chapter comments: users can comment after connecting wallet",
-      'Updated frontend audio UX: when server MP3 cache exists, default to "Play Cached MP3" instead of \"Generate MP3\"',
+      'Updated frontend audio UX: when server MP3 cache exists, default to "Play Cached MP3" instead of "Generate MP3"',
       "Added per-chapter word count display",
       "Reader markdown: long code/quoted blocks now auto-wrap while preserving readability",
     ],

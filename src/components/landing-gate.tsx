@@ -7,7 +7,7 @@ import { useCallback, useMemo } from "react";
 import { FloatingReaderAiShell } from "@/components/floating-reader-ai-shell";
 import { ReaderAiRecommendPanel } from "@/components/reader-ai-recommend-panel";
 import { SiteLocaleControl } from "@/components/site-locale-control";
-import { getLandingProgressTimeline } from "@/i18n/landing-progress";
+import { getLandingProgressTimeline } from "../i18n/landing-progress";
 import { useSiteLocale } from "@/providers/site-locale-provider";
 import { useWeb3Auth } from "@/hooks/use-web3-auth";
 
@@ -225,6 +225,7 @@ export function LandingGate() {
             ))}
           </div>
         </section>
+
       </main>
 
       <footer className="relative z-10 border-t border-white/5 bg-black/20 px-6 py-6 backdrop-blur-md">

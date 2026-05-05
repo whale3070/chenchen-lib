@@ -168,8 +168,10 @@ export function WorkspaceClaudeChat({ authorId }: { authorId: string }) {
   const [modelChoices, setModelChoices] = useState<ModelChoice[] | null>(null);
   const [modelSlot, setModelSlot] = useState<string>("1");
   const [chatFullscreen, setChatFullscreen] = useState(false);
+  const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const copiedResetTimerRef = useRef<number | null>(null);
   /** When localStorage has bytes but parseStore fails, do not persist in-memory default over raw. */
   const skipPersistCorruptRef = useRef(false);
 
@@ -273,6 +275,14 @@ export function WorkspaceClaudeChat({ authorId }: { authorId: string }) {
     return () => {
       document.removeEventListener("fullscreenchange", sync);
       document.removeEventListener("webkitfullscreenchange", sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (copiedResetTimerRef.current !== null) {
+        window.clearTimeout(copiedResetTimerRef.current);
+      }
     };
   }, []);
 
@@ -525,6 +535,39 @@ export function WorkspaceClaudeChat({ authorId }: { authorId: string }) {
     else requestNodeFullscreen(el);
   }, []);
 
+  const copyAssistantMessage = useCallback(
+    async (content: string, messageKey: string) => {
+      const text = content.trim();
+      if (!text) return;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "true");
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand("copy");
+          ta.remove();
+          if (!ok) throw new Error("copy-failed");
+        }
+        setCopiedMessageKey(messageKey);
+        if (copiedResetTimerRef.current !== null) {
+          window.clearTimeout(copiedResetTimerRef.current);
+        }
+        copiedResetTimerRef.current = window.setTimeout(() => {
+          setCopiedMessageKey((prev) => (prev === messageKey ? null : prev));
+        }, 1800);
+      } catch {
+        setError(t("workspace.aiChatCopyFailed"));
+      }
+    },
+    [t],
+  );
+
   if (!hydrated || !store || !activeSession) {
     return (
       <p className="rounded-xl border border-[#1e2a3f] bg-[#121a29] p-4 text-sm text-zinc-400">
@@ -733,19 +776,34 @@ export function WorkspaceClaudeChat({ authorId }: { authorId: string }) {
             <p className="text-sm text-zinc-500">{t("workspace.aiChatEmptyThread")}</p>
           ) : (
             activeSession.messages.map((m, idx) => (
+              (() => {
+                const messageKey = `${m.createdAt}-${idx}`;
+                const copied = copiedMessageKey === messageKey;
+                return (
               <div
-                key={`${m.createdAt}-${idx}`}
+                key={messageKey}
                 className={
                   m.role === "user"
                     ? "ml-4 rounded-lg border border-sky-500/25 bg-sky-950/35 px-3 py-2"
                     : "mr-4 rounded-lg border border-violet-500/25 bg-violet-950/25 px-3 py-2"
                 }
               >
-                <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-                  {m.role === "user"
-                    ? t("workspace.aiChatRoleUser")
-                    : t("workspace.aiChatRoleAssistant")}
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                    {m.role === "user"
+                      ? t("workspace.aiChatRoleUser")
+                      : t("workspace.aiChatRoleAssistant")}
+                  </p>
+                  {m.role === "assistant" ? (
+                    <button
+                      type="button"
+                      onClick={() => void copyAssistantMessage(m.content, messageKey)}
+                      className="rounded border border-zinc-600 px-1.5 py-0.5 text-[10px] text-zinc-300 hover:border-cyan-400/60 hover:text-cyan-200"
+                    >
+                      {copied ? t("workspace.aiChatCopied") : t("workspace.aiChatCopy")}
+                    </button>
+                  ) : null}
+                </div>
                 {m.role === "assistant" ? (
                   <div
                     className={[
@@ -770,6 +828,8 @@ export function WorkspaceClaudeChat({ authorId }: { authorId: string }) {
                   <p className="mt-1 whitespace-pre-wrap text-sm text-zinc-200">{m.content}</p>
                 )}
               </div>
+                );
+              })()
             ))
           )}
           {sending ? (

@@ -71,6 +71,7 @@ function signedDownloadName(originalName: string): string {
 export function PdfSignatureTool() {
   const { t } = useSiteLocale();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const pdfTaskRef = useRef<ReturnType<typeof pdfjs.getDocument> | null>(null);
   const pdfProxyRef = useRef<pdfjs.PDFDocumentProxy | null>(null);
@@ -224,8 +225,8 @@ export function PdfSignatureTool() {
   const renderPdfPage = useCallback(async () => {
     const proxy = pdfProxyRef.current;
     const canvas = canvasRef.current;
-    const wrap = wrapRef.current;
-    if (!proxy || !canvas || !wrap) return;
+    const preview = previewRef.current;
+    if (!proxy || !canvas || !preview) return;
 
     setRendering(true);
     try {
@@ -233,8 +234,8 @@ export function PdfSignatureTool() {
       const baseVp = page.getViewport({ scale: 1 });
       const pageW = baseVp.width;
 
-      const maxCssW = Math.min(720, wrap.clientWidth || 720);
-      const scale = maxCssW / pageW;
+      const availableW = Math.max(320, (preview.clientWidth || 980) - 24);
+      const scale = availableW / pageW;
       const vp = page.getViewport({ scale });
 
       const prevR = lastRenderedVpRef.current;
@@ -548,63 +549,68 @@ export function PdfSignatureTool() {
       ) : null}
 
       <div
-        ref={wrapRef}
-        className="relative inline-block max-w-full overflow-auto rounded-lg border border-neutral-200 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-950"
+        ref={previewRef}
+        className="w-full overflow-auto rounded-lg border border-neutral-200 bg-neutral-100 p-2 dark:border-neutral-700 dark:bg-neutral-950"
+        style={{ height: "calc(100dvh - 280px)" }}
       >
-        <canvas ref={canvasRef} className="block max-w-full" />
-        {sigUrl && viewSize && sigBox ? (
-          <div
-            className="pointer-events-none absolute left-0 top-0"
-            style={{ width: viewSize.w, height: viewSize.h }}
-          >
-            <div
-              className="pointer-events-auto absolute border-2 border-cyan-600 bg-cyan-500/15 shadow-md dark:border-cyan-400"
-              style={{
-                left: sigBox.left,
-                top: sigBox.top,
-                width: sigBox.width,
-                height: sigBox.height,
-              }}
-              onPointerDown={beginMove}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={sigUrl}
-                alt=""
-                className="h-full w-full cursor-move select-none object-fill"
-                draggable={false}
-              />
-              {(
-                [
-                  ["nw", -HANDLE / 2, -HANDLE / 2, "nw-resize"],
-                  ["ne", sigBox.width - HANDLE / 2, -HANDLE / 2, "ne-resize"],
-                  ["sw", -HANDLE / 2, sigBox.height - HANDLE / 2, "sw-resize"],
-                  [
-                    "se",
-                    sigBox.width - HANDLE / 2,
-                    sigBox.height - HANDLE / 2,
-                    "se-resize",
-                  ],
-                ] as const
-              ).map(([corner, x, y, cur]) => (
-                <button
-                  key={corner}
-                  type="button"
-                  aria-label={corner}
-                  className="absolute z-10 touch-none rounded-sm border border-cyan-700 bg-white dark:border-cyan-300 dark:bg-neutral-900"
+        <div className="flex min-h-full w-full items-start justify-center">
+          <div ref={wrapRef} className="relative inline-block">
+            <canvas ref={canvasRef} className="block max-w-none" />
+            {sigUrl && viewSize && sigBox ? (
+              <div
+                className="pointer-events-none absolute left-0 top-0"
+                style={{ width: viewSize.w, height: viewSize.h }}
+              >
+                <div
+                  className="pointer-events-auto absolute border-2 border-cyan-600 bg-cyan-500/15 shadow-md dark:border-cyan-400"
                   style={{
-                    left: x,
-                    top: y,
-                    width: HANDLE,
-                    height: HANDLE,
-                    cursor: cur,
+                    left: sigBox.left,
+                    top: sigBox.top,
+                    width: sigBox.width,
+                    height: sigBox.height,
                   }}
-                  onPointerDown={(ev) => beginResize(corner, ev)}
-                />
-              ))}
-            </div>
+                  onPointerDown={beginMove}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={sigUrl}
+                    alt=""
+                    className="h-full w-full cursor-move select-none object-fill"
+                    draggable={false}
+                  />
+                  {(
+                    [
+                      ["nw", -HANDLE / 2, -HANDLE / 2, "nw-resize"],
+                      ["ne", sigBox.width - HANDLE / 2, -HANDLE / 2, "ne-resize"],
+                      ["sw", -HANDLE / 2, sigBox.height - HANDLE / 2, "sw-resize"],
+                      [
+                        "se",
+                        sigBox.width - HANDLE / 2,
+                        sigBox.height - HANDLE / 2,
+                        "se-resize",
+                      ],
+                    ] as const
+                  ).map(([corner, x, y, cur]) => (
+                    <button
+                      key={corner}
+                      type="button"
+                      aria-label={corner}
+                      className="absolute z-10 touch-none rounded-sm border border-cyan-700 bg-white dark:border-cyan-300 dark:bg-neutral-900"
+                      style={{
+                        left: x,
+                        top: y,
+                        width: HANDLE,
+                        height: HANDLE,
+                        cursor: cur,
+                      }}
+                      onPointerDown={(ev) => beginResize(corner, ev)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        </div>
       </div>
 
       {sigUrl && viewSize && sigBox ? (

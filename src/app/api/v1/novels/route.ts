@@ -23,6 +23,14 @@ export type NovelMeta = {
 export type NovelListItem = NovelMeta & {
   wordCount: number;
   lastModified: string;
+  forkSource?: {
+    sourceWorkId: string;
+    sourceAuthorId: string;
+    sourceBranchId: string;
+    sourceArticleId?: string;
+    createdAt: string;
+  };
+  forkChildrenCount?: number;
 };
 
 type AuthorNovelsIndex = {
@@ -173,10 +181,102 @@ async function writeAuthorIndex(idx: AuthorNovelsIndex) {
   await fs.writeFile(fp, JSON.stringify(idx, null, 2), "utf8");
 }
 
+async function readForkRelationIndex(authorLower: string): Promise<{
+  sourceByForkedWorkId: Record<
+    string,
+    {
+      sourceWorkId: string;
+      sourceAuthorId: string;
+      sourceBranchId: string;
+      sourceArticleId?: string;
+      createdAt: string;
+    }
+  >;
+  childrenCountBySourceWorkId: Record<string, number>;
+}> {
+  const dir = path.join(process.cwd(), ".data", "versioning", "forks");
+  const sourceByForkedWorkId: Record<
+    string,
+    {
+      sourceWorkId: string;
+      sourceAuthorId: string;
+      sourceBranchId: string;
+      sourceArticleId?: string;
+      createdAt: string;
+    }
+  > = {};
+  const childrenCountBySourceWorkId: Record<string, number> = {};
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(dir);
+  } catch (e: unknown) {
+    const code =
+      e && typeof e === "object" && "code" in e
+        ? (e as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT")
+      return { sourceByForkedWorkId, childrenCountBySourceWorkId };
+    throw e;
+  }
+  await Promise.all(
+    files
+      .filter((name) => name.endsWith(".json"))
+      .map(async (name) => {
+        try {
+          const raw = await fs.readFile(path.join(dir, name), "utf8");
+          const parsed = parseLeadingJsonValue(raw) as {
+            fork_owner_id?: string;
+            forked_work_id?: string;
+            source_work_id?: string;
+            source_author_id?: string;
+            source_branch_id?: string;
+            source_article_id?: string;
+            created_at?: string;
+          };
+          if (
+            typeof parsed.fork_owner_id !== "string" ||
+            parsed.fork_owner_id.toLowerCase() !== authorLower
+          ) {
+            return;
+          }
+          const forkedWorkId =
+            typeof parsed.forked_work_id === "string" ? parsed.forked_work_id.trim() : "";
+          const sourceWorkId =
+            typeof parsed.source_work_id === "string" ? parsed.source_work_id.trim() : "";
+          const sourceAuthorId =
+            typeof parsed.source_author_id === "string" ? parsed.source_author_id.trim() : "";
+          if (!forkedWorkId || !sourceWorkId || !sourceAuthorId) return;
+          childrenCountBySourceWorkId[sourceWorkId] =
+            (childrenCountBySourceWorkId[sourceWorkId] ?? 0) + 1;
+          sourceByForkedWorkId[forkedWorkId] = {
+            sourceWorkId,
+            sourceAuthorId,
+            sourceBranchId:
+              typeof parsed.source_branch_id === "string" && parsed.source_branch_id.trim()
+                ? parsed.source_branch_id.trim()
+                : "main",
+            sourceArticleId:
+              typeof parsed.source_article_id === "string" && parsed.source_article_id.trim()
+                ? parsed.source_article_id.trim()
+                : undefined,
+            createdAt:
+              typeof parsed.created_at === "string" && parsed.created_at.trim()
+                ? parsed.created_at.trim()
+                : "",
+          };
+        } catch {
+          // ignore broken fork metadata files
+        }
+      }),
+  );
+  return { sourceByForkedWorkId, childrenCountBySourceWorkId };
+}
+
 async function enrichNovels(
   authorLower: string,
   novels: NovelMeta[],
 ): Promise<NovelListItem[]> {
+  const forkRelationIndex = await readForkRelationIndex(authorLower);
   return Promise.all(
     novels.map(async (novel) => {
       const structureStats = await readStructureStats(authorLower, novel.id);
@@ -188,6 +288,8 @@ async function enrichNovels(
         lastModified:
           (useStructure ? structureStats.structureUpdatedAt : stats.draftUpdatedAt) ??
           novel.updatedAt,
+        forkSource: forkRelationIndex.sourceByForkedWorkId[novel.id],
+        forkChildrenCount: forkRelationIndex.childrenCountBySourceWorkId[novel.id] ?? 0,
       };
     }),
   );

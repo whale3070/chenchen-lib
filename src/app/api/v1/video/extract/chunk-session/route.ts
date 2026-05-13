@@ -8,7 +8,6 @@ import { isAddress } from "viem";
 import { VIDEO_EXTRACT_CHUNK_BYTES, VIDEO_EXTRACT_MAX_BYTES } from "@/lib/video-extract-constants";
 import {
   inferUploadExtFromName,
-  isRawMp3ExtractMedia,
   isSupportedExtractMedia,
 } from "@/lib/video-extract-filename";
 
@@ -84,11 +83,8 @@ export async function POST(req: NextRequest) {
     return badRequest(`文件过大（>${VIDEO_EXTRACT_MAX_BYTES / (1024 * 1024)}MB）`);
   }
 
-  if (isRawMp3ExtractMedia(fileName, mime)) {
-    return badRequest("MP3 请使用工作台普通上传（单次 POST），无需分片");
-  }
   if (!isSupportedExtractMedia(fileName, mime)) {
-    return badRequest("不支持的格式；分片上传仅用于需转码的 MP4 / WAV / Opus / Ogg");
+    return badRequest("不支持的格式；分片上传支持 MP4 / WAV / Opus / Ogg / MP3");
   }
 
   const ext = inferUploadExtFromName(fileName, mime);

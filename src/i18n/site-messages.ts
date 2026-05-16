@@ -38,6 +38,8 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.footerHint": "Connect a wallet to create and sync",
     "landing.connecting": "Connecting…",
     "landing.connectWallet": "Connect wallet · MetaMask",
+    "landing.terms": "Terms of Service",
+    "landing.privacy": "Privacy Policy",
 
     "workspace.sessionLoading": "Restoring session…",
     "workspace.connectingTitle": "Connecting wallet…",
@@ -239,6 +241,8 @@ export const siteMessages: Record<"en" | "zh-CN", Record<string, string>> = {
     "landing.footerHint": "连接钱包以继续创作与同步",
     "landing.connecting": "连接中…",
     "landing.connectWallet": "连接钱包以继续 · MetaMask",
+    "landing.terms": "用户服务协议",
+    "landing.privacy": "隐私政策",
 
     "workspace.sessionLoading": "正在恢复会话…",
     "workspace.connectingTitle": "正在连接钱包…",

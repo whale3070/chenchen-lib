@@ -112,7 +112,8 @@ async function readDraftStats(
         ? (e as NodeJS.ErrnoException).code
         : undefined;
     if (code === "ENOENT") return { wordCount: 0, draftUpdatedAt: null };
-    throw e;
+    // 某本草稿损坏时不应拖垮整个作品列表。
+    return { wordCount: 0, draftUpdatedAt: null };
   }
 }
 
@@ -154,7 +155,8 @@ async function readStructureStats(
         ? (e as NodeJS.ErrnoException).code
         : undefined;
     if (code === "ENOENT") return { wordCount: 0, structureUpdatedAt: null };
-    throw e;
+    // 某本结构文件损坏时不应拖垮整个作品列表。
+    return { wordCount: 0, structureUpdatedAt: null };
   }
 }
 

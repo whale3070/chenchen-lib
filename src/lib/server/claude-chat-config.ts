@@ -8,10 +8,26 @@ export const DEFAULT_CLAUDE_MODEL = "claude-opus-4-6";
 
 export type ClaudeModelChoice = { id: string; model: string };
 
-export function getClaudeCompletionsUrl(): string | null {
+export type ClaudeApiMode = "openai" | "anthropic";
+
+export function getClaudeApiMode(): ClaudeApiMode {
+  const raw =
+    process.env.CLAUDE_API_MODE?.trim().toLowerCase() ||
+    process.env.CLAUDE_PROVIDER?.trim().toLowerCase() ||
+    "";
+  if (raw === "anthropic") return "anthropic";
+  return "openai";
+}
+
+export function getClaudeUpstreamUrl(): string | null {
   const raw = process.env.CLAUDE_URL?.trim();
   if (!raw) return null;
   const noComment = raw.split("#")[0].trim();
+  const mode = getClaudeApiMode();
+  if (mode === "anthropic") {
+    if (noComment.includes("/messages")) return noComment;
+    return `${noComment.replace(/\/$/, "")}/messages`;
+  }
   if (noComment.includes("chat/completions")) return noComment;
   return `${noComment.replace(/\/$/, "")}/chat/completions`;
 }
@@ -42,5 +58,5 @@ export function getClaudeModelChoices(): ClaudeModelChoice[] {
 }
 
 export function isClaudeChatConfigured(): boolean {
-  return Boolean(getClaudeCompletionsUrl() && getClaudeApiKey());
+  return Boolean(getClaudeUpstreamUrl() && getClaudeApiKey());
 }

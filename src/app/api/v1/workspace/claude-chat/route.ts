@@ -1,7 +1,8 @@
 import {
   DEFAULT_CLAUDE_MODEL,
+  getClaudeApiMode,
   getClaudeApiKey,
-  getClaudeCompletionsUrl,
+  getClaudeUpstreamUrl,
   getClaudeModelChoices,
   isClaudeChatConfigured,
 } from "@/lib/server/claude-chat-config";
@@ -59,7 +60,8 @@ export async function POST(req: NextRequest) {
   const wh = parseWalletHeader(req);
   if (!wh.ok) return wh.res;
 
-  const url = getClaudeCompletionsUrl();
+  const mode = getClaudeApiMode();
+  const url = getClaudeUpstreamUrl();
   const apiKey = getClaudeApiKey();
   if (!url || !apiKey) {
     return NextResponse.json(
@@ -138,17 +140,41 @@ export async function POST(req: NextRequest) {
     return defaultMax;
   })();
 
-  const upstream = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
+  const upstreamHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  let upstreamBody: Record<string, unknown>;
+  if (mode === "anthropic") {
+    const system = messages
+      .filter((m) => m.role === "system")
+      .map((m) => m.content.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    const anthroMessages = messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({ role: m.role, content: m.content }));
+    upstreamHeaders["x-api-key"] = apiKey;
+    upstreamHeaders["anthropic-version"] =
+      process.env.CLAUDE_ANTHROPIC_VERSION?.trim() || "2023-06-01";
+    upstreamBody = {
+      model,
+      max_tokens: maxTokens,
+      messages: anthroMessages,
+      ...(system ? { system } : {}),
+    };
+  } else {
+    upstreamHeaders.Authorization = `Bearer ${apiKey}`;
+    upstreamBody = {
       model,
       messages,
       max_tokens: maxTokens,
-    }),
+    };
+  }
+
+  const upstream = await fetch(url, {
+    method: "POST",
+    headers: upstreamHeaders,
+    body: JSON.stringify(upstreamBody),
   });
 
   const text = await upstream.text();
@@ -161,15 +187,27 @@ export async function POST(req: NextRequest) {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
+    parsed = JSON.parse(text);
   } catch {
     return NextResponse.json({ error: "上游返回非 JSON" }, { status: 502 });
   }
 
-  const p = parsed as { choices?: Array<{ message?: { content?: string } }> };
-  const content = p.choices?.[0]?.message?.content;
+  let content: string | undefined;
+  if (mode === "anthropic") {
+    const p = parsed as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    const parts = Array.isArray(p.content)
+      ? p.content
+          .filter((c) => c?.type === "text" && typeof c.text === "string")
+          .map((c) => String(c.text))
+      : [];
+    const joined = parts.join("\n").trim();
+    if (joined) content = joined;
+  } else {
+    const p = parsed as { choices?: Array<{ message?: { content?: string } }> };
+    content = p.choices?.[0]?.message?.content;
+  }
   if (typeof content !== "string") {
     return NextResponse.json(
       { error: "响应中无 assistant 正文", raw: text.slice(0, 2000) },
